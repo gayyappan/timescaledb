@@ -22,7 +22,7 @@
 #include <executor/nodeAgg.h>
 #include <utils/timestamp.h>
 #include <utils/selfuncs.h>
-
+#include <access/sysattr.h>
 #include "compat-msvc-enter.h"
 #include <optimizer/cost.h>
 #include <tcop/tcopprot.h>
@@ -45,6 +45,7 @@
 #include "dimension.h"
 #include "chunk_dispatch_plan.h"
 #include "hypertable_insert.h"
+#include "hypertable_update.h"
 #include "constraint_aware_append.h"
 #include "partitioning.h"
 #include "dimension_slice.h"
@@ -61,6 +62,8 @@ static planner_hook_type prev_planner_hook;
 static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook;
 static get_relation_info_hook_type prev_get_relation_info_hook;
 static create_upper_paths_hook_type prev_create_upper_paths_hook;
+static PlannedStmt* 
+ts_hypertable_process_plannedstmt( PlannedStmt *pstmt);
 
 #define CTE_NAME_HYPERTABLES "hypertable_parent"
 
@@ -143,6 +146,9 @@ timescaledb_planner(Query *parse, int cursor_opts, ParamListInfo bound_params)
 
 	/* Call the standard planner */
 	stmt = standard_planner(parse, cursor_opts, bound_params);
+        stmt = ts_hypertable_process_plannedstmt(stmt);
+        //ts_hypertable_process_plannedstmt(stmt);
+	   //TO_DO move following to the post planner as well.
 
 	/*
 	 * Our top-level HypertableInsert plan node that wraps ModifyTable needs
@@ -488,6 +494,77 @@ replace_hypertable_insert_paths(PlannerInfo *root, List *pathlist)
 
 	return new_pathlist;
 }
+        
+static 
+bool ts_has_part_attrs( Hypertable *ht, Bitmapset *collist)
+{
+  int i;
+  Hyperspace *hs = ht->space;
+  for(i=0; i < hs->num_dimensions; i++)
+  {
+     AttrNumber dimattno = hs->dimensions[i].column_attno;
+     if (bms_is_member(dimattno - FirstLowInvalidHeapAttributeNumber,
+			     collist))
+         return true;
+  }
+  return false;
+}
+static PlannedStmt* 
+ts_hypertable_process_plannedstmt( PlannedStmt *pstmt)
+{
+    Plan       *plan = pstmt->planTree;
+
+    /*for updates we add a custom scan node here
+    * We cannot do this like the INSERT path because inheritance_planner->
+    * grouping_planner to create subplans for each inherited table and when
+    * that is done, it cfreates a ModifyTable node.
+    * create_upper_rel_hook is called from grouping_planner. And we don't have
+    * a corresponding ModifyTable path at that point.
+    */
+    if( IsA(plan, ModifyTable) )
+    {
+        ModifyTable *mtplan = (ModifyTable*)plan;
+        if (mtplan->operation == CMD_UPDATE)
+        {
+               List       *resultRelations = pstmt->resultRelations;
+               List       *rangeTable = pstmt->rtable;
+               Cache      *hcache = ts_hypertable_cache_pin();
+               Hypertable *ht;
+	       ListCell   *l;
+               bool partColUpd = FALSE;
+               /* safe to assume all operations involve hypertable parts and exit
+                 prematurely ???
+               */
+               foreach(l, resultRelations)
+               {
+                        Index           relIndex = lfirst_int(l);
+                        Oid                     relOid;
+
+                        relOid = getrelid(relIndex, rangeTable);
+                        ht = ts_hypertable_cache_get_entry(hcache, relOid);
+                        if( ht != NULL )
+                        {
+                           /*we have a hypertable. is the partition 
+			    * column used in set clause of UPDATE.
+			    * then we can have potential partition movement of a row */
+	                   RangeTblEntry *htrte ;
+			   htrte = rt_fetch(relIndex, rangeTable);
+                           partColUpd = ts_has_part_attrs(ht, htrte->updatedCols);
+                           break;
+                        }
+                }
+                ts_cache_release(hcache);
+                if( partColUpd ) /* modify the planned stmt tree */	
+                { 
+		   Plan * pl = ts_hypertable_update_plan_create( mtplan );
+		   pstmt->planTree = pl;
+		}
+		    
+        }
+    }
+    return pstmt;    
+}
+
 
 static void
 #if PG96 || PG10
