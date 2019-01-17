@@ -27,6 +27,7 @@ set(SOURCES
   hypertable.c
   hypertable_cache.c
   hypertable_insert.c
+  hypertable_update.c
   hypertable_restrict_info.c
   indexing.c
   init.c

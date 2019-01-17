@@ -11,11 +11,17 @@
 #include <foreign/fdwapi.h>
 
 #include "hypertable.h"
+#include <chunk_dispatch_state.h>
 
 typedef struct HypertableUpdateState
 {
 	CustomScanState cscan_state;
+	Oid htoid;
 	ModifyTable *mt;
+	ModifyTable *del_mt;
+	ModifyTable *ins_mt;
+	EState *estate ; //do we need this
+	ChunkDispatch *dispatch;
 } HypertableUpdateState;
 
 typedef struct HypertableUpdateSubplanState
@@ -26,9 +32,17 @@ typedef struct HypertableUpdateSubplanState
 					 for later use by
 					 HypertableUpdateState
                                        */
+	EState *estate;
 } HypertableUpdateSubplanState;
 
-extern Plan *ts_hypertable_update_plan_create( ModifyTable *mt);
-extern Plan *ts_hypertable_update_subplan_create( Plan *pl);
-
+typedef struct HypertableUpdateRedoState
+{
+	CustomScanState cscan_state;
+	TupleTableSlot *saved_tup;
+} HypertableUpdateRedoState;
+	
+//extern Plan *ts_hypertable_update_plan_create( PlannedStmt *pstmt, ModifyTable *mt);
+//extern Plan *ts_hypertable_update_subplan_create( Plan *pl);
+extern Plan* ts_modify_updpart_plan( PlannedStmt *pstmt,
+                ModifyTable * mt, Oid htreloid);
 #endif							/* TIMESCALEDB_HYPERTABLE_UPDATE_H */

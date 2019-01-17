@@ -21,4 +21,10 @@ typedef struct ChunkDispatchPath
 
 extern Path *ts_chunk_dispatch_path_create(ModifyTablePath *mtpath, Path *subpath, Index hypertable_rti, Oid hypertable_relid);
 
+Plan *
+chunk_dispatch_plan_create1( Oid htoid,
+   List *tlist,
+   List *clauses,
+   List *custom_plans);
+
 #endif							/* TIMESCALEDB_CHUNK_DISPATCH_PLAN_H */

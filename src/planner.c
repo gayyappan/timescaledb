@@ -532,9 +532,13 @@ ts_hypertable_process_plannedstmt( PlannedStmt *pstmt)
                Hypertable *ht;
 	       ListCell   *l;
                bool partColUpd = FALSE;
+	       Oid htreloid;
                /* safe to assume all operations involve hypertable parts and exit
                  prematurely ???
                */
+	       /* or okay to just look at nominalRelation which is index to the parent of inh hierarchy? instead of looking at all the tables?
+		* TODO
+		*/
                foreach(l, resultRelations)
                {
                         Index           relIndex = lfirst_int(l);
@@ -550,13 +554,14 @@ ts_hypertable_process_plannedstmt( PlannedStmt *pstmt)
 	                   RangeTblEntry *htrte ;
 			   htrte = rt_fetch(relIndex, rangeTable);
                            partColUpd = ts_has_part_attrs(ht, htrte->updatedCols);
+			   htreloid = relOid;
                            break;
                         }
                 }
                 ts_cache_release(hcache);
                 if( partColUpd ) /* modify the planned stmt tree */	
                 { 
-		   Plan * pl = ts_hypertable_update_plan_create( mtplan );
+		   Plan * pl = ts_modify_updpart_plan( pstmt, mtplan , htreloid);
 		   pstmt->planTree = pl;
 		}
 		    

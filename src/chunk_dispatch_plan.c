@@ -85,6 +85,43 @@ chunk_dispatch_plan_create(PlannerInfo *root,
 	return &cscan->scan.plan;
 }
 
+/*create a chunk dispatch plan
+ * for a hypertable 
+ */
+Plan *
+chunk_dispatch_plan_create1( Oid htoid,
+   List *tlist,
+   List *clauses,
+   List *custom_plans)
+{
+	CustomScan *cscan = makeNode(CustomScan);
+	ListCell   *lc;
+
+	foreach(lc, custom_plans)
+	{
+		Plan	   *subplan = lfirst(lc);
+
+		cscan->scan.plan.startup_cost += subplan->startup_cost;
+		cscan->scan.plan.total_cost += subplan->total_cost;
+		cscan->scan.plan.plan_rows += subplan->plan_rows;
+		cscan->scan.plan.plan_width += subplan->plan_width;
+	}
+
+	cscan->custom_private = list_make1_oid(htoid);
+	cscan->methods = &chunk_dispatch_plan_methods;
+	cscan->custom_plans = custom_plans;
+	cscan->scan.scanrelid = 0;	/* Indicate this is not a real relation we are
+								 * scanning */
+	cscan->scan.plan.targetlist = tlist;
+
+	/*
+	 * We need to set a custom_scan_tlist for EXPLAIN (verbose).
+	 */
+	cscan->custom_scan_tlist = tlist;
+
+	return &cscan->scan.plan;
+}
+
 static CustomPathMethods chunk_dispatch_path_methods = {
 	.CustomName = "ChunkDispatchPath",
 	.PlanCustomPath = chunk_dispatch_plan_create,
