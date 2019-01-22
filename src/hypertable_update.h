@@ -8,9 +8,7 @@
 
 #include <postgres.h>
 #include <nodes/execnodes.h>
-#include <foreign/fdwapi.h>
 
-#include "hypertable.h"
 #include <chunk_dispatch_state.h>
 
 typedef struct HypertableUpdateState
@@ -41,8 +39,6 @@ typedef struct HypertableUpdateRedoState
 	TupleTableSlot *saved_tup;
 } HypertableUpdateRedoState;
 	
-//extern Plan *ts_hypertable_update_plan_create( PlannedStmt *pstmt, ModifyTable *mt);
-//extern Plan *ts_hypertable_update_subplan_create( Plan *pl);
 extern Plan* ts_modify_updpart_plan( PlannedStmt *pstmt,
                 ModifyTable * mt, Oid htreloid);
 #endif							/* TIMESCALEDB_HYPERTABLE_UPDATE_H */

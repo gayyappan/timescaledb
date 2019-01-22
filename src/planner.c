@@ -496,7 +496,8 @@ replace_hypertable_insert_paths(PlannerInfo *root, List *pathlist)
 }
         
 static 
-bool ts_has_part_attrs( Hypertable *ht, Bitmapset *collist)
+bool ts_has_part_attrs( Hypertable *ht, Bitmapset *collist, 
+		AttrNumber *retpart_attno)
 {
   int i;
   Hyperspace *hs = ht->space;
@@ -505,7 +506,10 @@ bool ts_has_part_attrs( Hypertable *ht, Bitmapset *collist)
      AttrNumber dimattno = hs->dimensions[i].column_attno;
      if (bms_is_member(dimattno - FirstLowInvalidHeapAttributeNumber,
 			     collist))
+     {
+         *retpart_attno = dimattno;
          return true;
+     }
   }
   return false;
 }
@@ -532,7 +536,8 @@ ts_hypertable_process_plannedstmt( PlannedStmt *pstmt)
                Hypertable *ht;
 	       ListCell   *l;
                bool partColUpd = FALSE;
-	       Oid htreloid;
+				AttrNumber partattno;	
+				Oid htreloid;
                /* safe to assume all operations involve hypertable parts and exit
                  prematurely ???
                */
@@ -550,12 +555,12 @@ ts_hypertable_process_plannedstmt( PlannedStmt *pstmt)
                         {
                            /*we have a hypertable. is the partition 
 			    * column used in set clause of UPDATE.
-			    * then we can have potential partition movement of a row */
-	                   RangeTblEntry *htrte ;
-			   htrte = rt_fetch(relIndex, rangeTable);
-                           partColUpd = ts_has_part_attrs(ht, htrte->updatedCols);
-			   htreloid = relOid;
-                           break;
+						    * then we can have potential partition movement of a row */
+							   	RangeTblEntry *htrte ;
+								htrte = rt_fetch(relIndex, rangeTable);
+								partColUpd = ts_has_part_attrs(ht, htrte->updatedCols, &partattno);
+								htreloid = relOid;
+								break;
                         }
                 }
                 ts_cache_release(hcache);
