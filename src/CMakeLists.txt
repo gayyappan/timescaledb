@@ -13,6 +13,8 @@ set(SOURCES
   chunk_index.c
   chunk_insert_state.c
   constraint_aware_append.c
+  cont_agg.c
+  cagg_final.c
   cross_module_fn.c
   copy.c
   dimension.c
@@ -38,6 +40,7 @@ set(SOURCES
   plan_expand_hypertable.c
   plan_add_hashagg.c
   plan_agg_bookend.c
+  plan_partialize.c
   plan_ordered_append.c
   planner_import.c
   process_utility.c
