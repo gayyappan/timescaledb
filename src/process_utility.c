@@ -2072,56 +2072,58 @@ process_create_trigger_end(Node *parsetree)
 	foreach_chunk_relation(stmt->relation, create_trigger_chunk, stmt);
 }
 
-static bool process_ctas( ProcessUtilityArgs *args)
+static bool
+process_ctas(ProcessUtilityArgs *args)
 {
 	Node *parsetree = args->parsetree;
-	char *tsctas_opts[] = {"ts_continuous"}; //, "ts_refresh"
-	CreateTableAsStmt *stmt = (CreateTableAsStmt*)parsetree;
-	Query      *query = castNode(Query, stmt->query);
-        //bool            is_matview = (into->viewQuery != NULL);
-        Oid                    relid,  nspid;
+	char *tsctas_opts[] = { "ts_continuous" }; //, "ts_refresh"
+	CreateTableAsStmt *stmt = (CreateTableAsStmt *) parsetree;
+	Query *query = castNode(Query, stmt->query);
+	// bool            is_matview = (into->viewQuery != NULL);
+	Oid relid, nspid;
 	bool is_cagg = false;
 	int optcnt = 0;
-        List *defList;
+	List *defList;
 	ListCell *cell;
 	Assert(IsA(parsetree, CreateTableAsStmt));
-	if ( stmt->relkind != OBJECT_MATVIEW )
+	if (stmt->relkind != OBJECT_MATVIEW)
 		return false;
-        /* is this a continuous agg */
+	/* is this a continuous agg */
 	defList = stmt->into->options;
-        foreach(cell, defList)
-        {
-                DefElem    *def = (DefElem *) lfirst(cell);
- 	        if (pg_strcasecmp(def->defname, tsctas_opts[0] )  == 0 )
-	        {
+	foreach (cell, defList)
+	{
+		DefElem *def = (DefElem *) lfirst(cell);
+		if (pg_strcasecmp(def->defname, tsctas_opts[0]) == 0)
+		{
 			is_cagg = true;
-                }
-		optcnt ++;
+		}
+		optcnt++;
 	}
-	if( !is_cagg )
+	if (!is_cagg)
 		return false;
-	else if( is_cagg && optcnt > 1 )
-        {
-           ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-              errmsg("Invalid parameter list in WITH CLAUSE for continuous aggs")));
+	else if (is_cagg && optcnt > 1)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("Invalid parameter list in WITH CLAUSE for continuous aggs")));
 	}
 
-        query = castNode( Query, stmt->query);
-	cagg_validate_query( query);
-        
-        nspid = RangeVarGetCreationNamespace(stmt->into->rel);
+	query = castNode(Query, stmt->query);
+	cagg_validate_query(query);
+
+	nspid = RangeVarGetCreationNamespace(stmt->into->rel);
 	relid = get_relname_relid(stmt->into->rel->relname, nspid);
 	if (stmt->if_not_exists)
-        {
-                if (get_relname_relid(stmt->into->rel->relname, nspid))
-                {               
-                        ereport(NOTICE, (errcode(ERRCODE_DUPLICATE_TABLE),
-                   errmsg("relation \"%s\" already exists, skipping",
-                                        stmt->into->rel->relname)));
-                        return true;
-                }
-        }
- 	cagg_create_mattbl( stmt );
+	{
+		if (get_relname_relid(stmt->into->rel->relname, nspid))
+		{
+			ereport(NOTICE,
+					(errcode(ERRCODE_DUPLICATE_TABLE),
+					 errmsg("relation \"%s\" already exists, skipping", stmt->into->rel->relname)));
+			return true;
+		}
+	}
+	cagg_create_mattbl(stmt);
 	return true;
 }
 
