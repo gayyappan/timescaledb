@@ -31,10 +31,17 @@ typedef struct CAggInternalAggState
 	Oid transtype;
 	Datum agg_state;
 	bool agg_state_isnull;
+	bool agg_state_comb_init;
+	/*when we have a strict combine function, both arg values have
+	 * to eb non-null (like min/max). When we see first non-null
+	 * value, initilaize it and set this to be true.
+	 */
 	FmgrInfo deserialfn;
 	FmgrInfo combinefn;
+	FmgrInfo finalfn;
 	FunctionCallInfoData deserfn_fcinfo;
 	FunctionCallInfoData combfn_fcinfo;
+	FunctionCallInfoData finalfn_fcinfo;
 } CAggInternalAggState;
 
 static TupleTableSlot *
@@ -73,42 +80,47 @@ createDummyAggState()
 
 // TODO -deal with NULLS
 static Datum
-deserialize_aggstate(FunctionCallInfoData *agg_fcinfo, Oid deserialfnoid, Oid transtype,
-					 bytea *serialized)
+deserialize_aggstate(CAggInternalAggState *cstate, bytea *serialized, bool serialized_isnull,
+					 bool *deserisnull)
 {
 	Datum deserialized;
-
-	if (OidIsValid(deserialfnoid))
+	FunctionCallInfoData *agg_fcinfo = &cstate->deserfn_fcinfo;
+	*deserisnull = true;
+	if (OidIsValid(cstate->deserialfnoid))
 	{
+		if (serialized_isnull && cstate->deserialfn.fn_strict)
+		{
+			PG_RETURN_DATUM(deserialized);
+			/*don't call the deser function */
+		}
 		agg_fcinfo->arg[0] = PointerGetDatum(serialized);
-		agg_fcinfo->argnull[0] = false;
+		agg_fcinfo->argnull[0] = serialized_isnull;
 		deserialized = FunctionCallInvoke(agg_fcinfo);
-		if (agg_fcinfo->isnull)
-			elog(ERROR, "got NULL in deserialize_aggstate");
+		*deserisnull = agg_fcinfo->isnull;
+		if (agg_fcinfo->isnull) // TODO remove
+			elog(NOTICE, "got NULL in deserialize_aggstate");
 	}
-	else
+	else if (!serialized_isnull)
 	{
 		StringInfo string = makeStringInfo();
 		Oid recv_fn, typIOParam;
 
-		getTypeBinaryInputInfo(transtype, &recv_fn, &typIOParam);
+		getTypeBinaryInputInfo(cstate->transtype, &recv_fn, &typIOParam);
 
 		appendBinaryStringInfo(string, VARDATA_ANY(serialized), VARSIZE_ANY_EXHDR(serialized));
 
 		deserialized = OidReceiveFunctionCall(recv_fn, string, typIOParam, 0);
+		*deserisnull = false;
 	}
 	PG_RETURN_DATUM(deserialized);
 }
 
 static CAggInternalAggState *
-caggfinal_initstate(MemoryContext *aggcontext, Oid aggfnoid, AggState *orig_aggstate)
+caggfinal_initstate(MemoryContext *aggcontext, Oid aggfnoid, Oid collation, AggState *orig_aggstate)
 {
 	CAggInternalAggState *cstate = NULL;
 	HeapTuple aggTuple;
 	Form_pg_aggregate aggform;
-	Datum initVal;
-	Datum textInitVal;
-	bool initValIsNull;
 	cstate = (CAggInternalAggState *) MemoryContextAlloc(*aggcontext, sizeof(CAggInternalAggState));
 	/* Fetch the pg_aggregate row */
 	aggTuple = SearchSysCache1(AGGFNOID, aggfnoid);
@@ -120,30 +132,12 @@ caggfinal_initstate(MemoryContext *aggcontext, Oid aggfnoid, AggState *orig_aggs
 	cstate->combinefnoid = aggform->aggcombinefn;
 	cstate->serialfnoid = aggform->aggserialfn;
 	cstate->deserialfnoid = aggform->aggdeserialfn;
-	cstate->transtype = aggform->aggmtranstype;
-	/*
-	 * initval is potentially null, so don't access it as a struct
-	 * use SysCacheGetAttr
-	 */
-	textInitVal = SysCacheGetAttr(AGGFNOID, aggTuple, Anum_pg_aggregate_agginitval, &initValIsNull);
-	if (initValIsNull)
-		initVal = (Datum) 0;
-	else
-	{
-		Oid typinput, typioparam;
-		char *strInitVal;
-
-		getTypeInputInfo(cstate->transtype, &typinput, &typioparam);
-		strInitVal = TextDatumGetCString(textInitVal);
-		initVal = OidInputFunctionCall(typinput, strInitVal, typioparam, -1);
-		pfree(strInitVal);
-	}
-
-	cstate->agg_state = initVal;
-	cstate->agg_state_isnull = initValIsNull;
+	cstate->transtype = aggform->aggtranstype;
+	// Need to init cstate->agg_state
+	cstate->agg_state_isnull = true;
+	cstate->agg_state_comb_init = false;
 	ReleaseSysCache(aggTuple);
 	{
-		Oid collation = InvalidOid;
 		void *aggstate_cxt;
 		if (OidIsValid(cstate->deserialfnoid))
 		{
@@ -170,28 +164,44 @@ caggfinal_initstate(MemoryContext *aggcontext, Oid aggfnoid, AggState *orig_aggs
 									 (void *) aggstate_cxt,
 									 NULL);
 		}
+		if (OidIsValid(cstate->finalfnoid))
+		{
+			fmgr_info(cstate->finalfnoid, &cstate->finalfn);
+			/* pass the aggstate information from our current call context */
+			aggstate_cxt = orig_aggstate;
+			InitFunctionCallInfoData(cstate->finalfn_fcinfo,
+									 &cstate->finalfn,
+									 1,
+									 collation,
+									 (void *) aggstate_cxt,
+									 NULL);
+		}
 	}
 	return cstate;
 }
 
-/* cagg_final(internal internal_state, Oid aggregatefun oid,  bytea aggstate,
- * ANYELEMENT null ) */
+/* cagg_final(internal internal_state, Oid aggregatefun oid,
+ *            Oid aggref_inputcollid, bytea aggstate,
+ * 		ANYELEMENT null --for type inference )
+ */
 Datum
 ts_caggfinal_sfunc(PG_FUNCTION_ARGS)
 {
 	CAggInternalAggState *cstate =
 		PG_ARGISNULL(0) ? NULL : (CAggInternalAggState *) PG_GETARG_POINTER(0);
 	Oid aggfnoid = PG_GETARG_OID(1);
+	Oid inpcollid = PG_GETARG_OID(2);
 	/* the arg is a internal state representation for the
 	 * agg we are computing
 	 */
 	// Datum aggstate_arg = PG_GETARG_DATUM(3); //how do we deal with NULLs?
-	bytea *aggstate_arg_serial = PG_GETARG_BYTEA_P(2);
+	bytea *aggstate_arg_serial = PG_ARGISNULL(3) ? NULL : PG_GETARG_BYTEA_P(3);
+	bool aggstate_arg_isnull = PG_ARGISNULL(3) ? true : false;
 	MemoryContext aggcontext, old_context;
 	Datum aggstate_arg_deser;
-	AggState *orig_aggstate ;
-	Assert( IsA( fcinfo->context, AggState) );
-	orig_aggstate	= (AggState*)fcinfo->context;
+	AggState *orig_aggstate;
+	Assert(IsA(fcinfo->context, AggState));
+	orig_aggstate = (AggState *) fcinfo->context;
 	if (!AggCheckCallContext(fcinfo, &aggcontext))
 	{
 		/* cannot be called directly because of internal-type argument */
@@ -201,22 +211,47 @@ ts_caggfinal_sfunc(PG_FUNCTION_ARGS)
 
 	if (cstate == NULL)
 	{
-		cstate = caggfinal_initstate(&aggcontext, aggfnoid, orig_aggstate);
+		cstate = caggfinal_initstate(&aggcontext, aggfnoid, inpcollid, orig_aggstate);
+		/* intial state = aggstate from first invocation */
+		cstate->agg_state = deserialize_aggstate(cstate,
+												 aggstate_arg_serial,
+												 aggstate_arg_isnull,
+												 &cstate->agg_state_isnull);
+		cstate->agg_state_comb_init = !(cstate->agg_state_isnull);
 	}
-
-	aggstate_arg_deser = deserialize_aggstate(&cstate->deserfn_fcinfo,
-											  cstate->deserialfnoid,
-											  cstate->transtype,
-											  aggstate_arg_serial);
-	// now we can combine state information
-	// TODO handle NULLS.
-	cstate->combfn_fcinfo.arg[0] = cstate->agg_state;
-	cstate->combfn_fcinfo.argnull[0] = cstate->agg_state_isnull;
-	cstate->combfn_fcinfo.arg[1] = aggstate_arg_deser;
-	cstate->combfn_fcinfo.argnull[1] = false;
-	cstate->agg_state = FunctionCallInvoke(&cstate->combfn_fcinfo);
-	cstate->agg_state_isnull = cstate->combfn_fcinfo.isnull;
-
+	else
+	{
+		bool deser_isnull;
+		bool callcomb;
+		aggstate_arg_deser =
+			deserialize_aggstate(cstate, aggstate_arg_serial, aggstate_arg_isnull, &deser_isnull);
+		/* don't combine state with NULL arg when we have a strict
+		 * function
+		 */
+		callcomb = true;
+		if (cstate->combinefn.fn_strict)
+		{
+			if (cstate->agg_state_comb_init == false && deser_isnull == false)
+			{
+				cstate->agg_state = aggstate_arg_deser;
+				cstate->agg_state_isnull = false;
+				cstate->agg_state_comb_init = true;
+				callcomb = false;
+			}
+			else if (deser_isnull)
+				callcomb = false;
+		}
+		// if( !( cstate->combinefn.fn_strict && deser_isnull ))
+		if (callcomb)
+		{
+			cstate->combfn_fcinfo.arg[0] = cstate->agg_state;
+			cstate->combfn_fcinfo.argnull[0] = cstate->agg_state_isnull;
+			cstate->combfn_fcinfo.arg[1] = aggstate_arg_deser;
+			cstate->combfn_fcinfo.argnull[1] = deser_isnull;
+			cstate->agg_state = FunctionCallInvoke(&cstate->combfn_fcinfo);
+			cstate->agg_state_isnull = cstate->combfn_fcinfo.isnull;
+		}
+	}
 	MemoryContextSwitchTo(old_context);
 
 	PG_RETURN_POINTER(cstate);
@@ -255,7 +290,6 @@ ts_caggfinal_finalfunc(PG_FUNCTION_ARGS)
 	CAggInternalAggState *cstate =
 		PG_ARGISNULL(0) ? NULL : (CAggInternalAggState *) PG_GETARG_POINTER(0);
 	MemoryContext aggcontext, old_context;
-	FmgrInfo aggfinal_finfo;
 
 	if (!AggCheckCallContext(fcinfo, &aggcontext))
 	{
@@ -265,10 +299,17 @@ ts_caggfinal_finalfunc(PG_FUNCTION_ARGS)
 	old_context = MemoryContextSwitchTo(aggcontext);
 	if (OidIsValid(cstate->finalfnoid))
 	{
-		fmgr_info(cstate->finalfnoid, &aggfinal_finfo);
-		cstate->agg_state = FunctionCall1Coll(&aggfinal_finfo, InvalidOid, cstate->agg_state);
+		if (!(cstate->finalfn.fn_strict && cstate->agg_state_isnull))
+		{
+			cstate->finalfn_fcinfo.arg[0] = cstate->agg_state;
+			cstate->finalfn_fcinfo.argnull[0] = cstate->agg_state_isnull;
+			cstate->agg_state = FunctionCallInvoke(&cstate->finalfn_fcinfo);
+			cstate->agg_state_isnull = cstate->finalfn_fcinfo.isnull;
+		}
 	}
 	MemoryContextSwitchTo(old_context);
-
-	PG_RETURN_DATUM(cstate->agg_state);
+	if (cstate->agg_state_isnull)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_DATUM(cstate->agg_state);
 }

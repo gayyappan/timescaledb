@@ -23,13 +23,13 @@ CREATE OR REPLACE FUNCTION aggregate_deserialize(val BYTEA, agg REGPROCEDURE, ty
 RETURNS ANYELEMENT AS '@MODULE_PATHNAME@', 'ts_aggregate_deserialize' LANGUAGE C VOLATILE;
 
 CREATE OR REPLACE FUNCTION _timescaledb_internal.ts_caggfinal_sfunc(
-internal, Oid, BYTEA , ANYELEMENT)
+internal, Oid, Oid, BYTEA , ANYELEMENT)
 RETURNS internal 
 AS '@MODULE_PATHNAME@', 'ts_caggfinal_sfunc'
 LANGUAGE C IMMUTABLE ;
 
 CREATE OR REPLACE FUNCTION _timescaledb_internal.ts_caggfinal_finalfunc(
-internal, Oid, BYTEA  , ANYELEMENT)
+internal, Oid, Oid, BYTEA  , ANYELEMENT)
 RETURNS anyelement
 AS '@MODULE_PATHNAME@', 'ts_caggfinal_finalfunc'
 LANGUAGE C IMMUTABLE ;
