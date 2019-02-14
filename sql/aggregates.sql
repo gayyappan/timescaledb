@@ -51,8 +51,6 @@ CREATE AGGREGATE histogram (DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION
     FINALFUNC_EXTRA
 );
 
---This aggregate returns the "cagg_final" element of the cagg_final argument when ordered by the second argument.
---Ex. cagg_final(temp, time) returns the temp value for the row with the lowest time
 CREATE AGGREGATE ts_internal_cagg_final( Oid, Oid, BYTEA , anyelement) (
     SFUNC = _timescaledb_internal.ts_caggfinal_sfunc,
     STYPE = internal,
