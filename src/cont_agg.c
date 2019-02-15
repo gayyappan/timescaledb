@@ -20,6 +20,7 @@
 #include <hypertable_cache.h>
 #include <cont_agg.h>
 #include <parser/parse_func.h>
+#include <parser/parse_relation.h> /*markVarForSelectPriv */
 
 void
 cagg_validate_query(Query *query)
@@ -109,12 +110,9 @@ cagg_validate_query(Query *query)
 /* add ts_internal_cagg_final to bytea column.
  * bytea column is the internal state for an agg. Pass info for the agg as "inp".
  * inpcol = bytea column.
- * tlist = list to which target entries are to eb added
- * tlist_attno - next available entry in targetlist
- * This function retunes an aggref
+ * This function returns an aggref
  * ts_internal_cagg_final( Oid, Oid, bytea, NULL::output_typeid)
- * //and adds entries for all the arguments to the passed in targetlist.
- * So the input targetlist is modified.
+ * the arguments are a list of targetentry
  */
 static Aggref *
 create_finalize_agg(Aggref *inp, Var *inpcol)
@@ -126,15 +124,16 @@ create_finalize_agg(Aggref *inp, Var *inpcol)
 	TargetEntry *te;
 	Const *oid1arg, *oid2arg, *nullarg;
 	Var *bytearg;
-	List *tlist = NIL; // aggregate args are stored as a list of TargetEntry
+	List *tlist = NIL;
 	int tlist_attno = 1;
 	List *argtypes = NIL;
 	Oid finalfnargtypes[] = { OIDOID, OIDOID, BYTEAOID, ANYELEMENTOID };
 	Oid finalfnoid;
 	List *funcname = list_make1(makeString(FINALFN));
 	finalfnoid = LookupFuncName(funcname, 4, finalfnargtypes, false);
-	// TODO cache finalfnoid and resue
-	// The arguments are aggref oid, inputcollid, bytea column-value, NULL::returntype
+	/* The arguments are input aggref oid,
+	 * inputcollid, bytea column-value, NULL::returntype
+	 */
 	argtypes = lappend_oid(argtypes, OIDOID);
 	argtypes = lappend_oid(argtypes, OIDOID);
 	argtypes = lappend_oid(argtypes, BYTEAOID);
@@ -194,19 +193,7 @@ create_finalize_agg(Aggref *inp, Var *inpcol)
 	return aggref;
 #undef FINALFN
 }
-/*
-Query * finalizeSelectQuery( Query * orig, List *attrList)
-{
-	TargetEntry *te;
-	ListCell *t;
-	Query * newq = copyObject(orig);
-	foreach (t, orig->targetList)
-	{
-  result = makeVar(vnum, attrno, vartypeid, type_mod, varcollid, sublevels_up);
 
-	}
-}
-*/
 static FuncExpr *
 get_partialize_func_info(Aggref *agg)
 {
@@ -214,9 +201,6 @@ get_partialize_func_info(Aggref *agg)
 	Oid partfnoid, partrettype;
 	partrettype = ANYELEMENTOID;
 	partfnoid = LookupFuncName(list_make1(makeString("partialize")), 1, &partrettype, false);
-	//		ftup = SearchSysCache1(PROCOID, ObjectIdGetDatum(partfnoid));
-	//		pform = (Form_pg_proc) GETSTRUCT(ftup);
-
 	partialize_fnexpr = makeFuncExpr(partfnoid,
 									 partrettype,
 									 list_make1(agg), /*args*/
@@ -228,8 +212,8 @@ get_partialize_func_info(Aggref *agg)
 
 typedef struct AggPartCxt
 {
-	List *matcollist; // for mattbl
-	List *seltlist;   // TODO remove for fnexpr with original varnos
+	List *matcollist; /* column defns for materialization tbl*/
+	List *seltlist;   /* tlist entries for modified SELECT */
 	List *origcolmap;
 	bool addcol;
 } AggPartCxt;
@@ -277,44 +261,125 @@ add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
 	}
 	return expression_tree_mutator(node, add_aggregate_partialize_mutator, cxt);
 }
-/*
-static Node *
-add_aggregate_finalize_mutator(Node *node, bool *cxt)
-{
-	if (node == NULL)
-		return NULL;
-	if (IsA(node, Aggref))
-	{
-		Aggref * = copyObject(get_finalize_func_info((Aggref*)node));
-		expr->args = list_make1(node);
-		*cxt = true;
-		return (Node *) expr;
-	}
-	return expression_tree_mutator(node, add_aggregate_finalize_mutator, cxt);
-}
-*/
 
-/* Create a hypertable for the continuous agg materialization.
+/* Make a slect query for the materialization table
+ * origquery - query passed to create view
+ * mattbladdress - materialization table ObjectAddress
+ * tlist_aliases - aliases for targetlist entries
+ */
+static Query *
+createSelQueryForMatTbl(Query *origquery, AggPartCxt *cxt, ObjectAddress *mattbladdress,
+						List *tlist_aliases)
+{
+	ListCell *lc;
+	Query *selquery = copyObject(origquery);
+	/* we have only 1 entry in rtable -checked during query validation
+	 * modify this to reflect the materialization table we just
+	 * created.
+	 */
+	RangeTblEntry *rte = list_nth(selquery->rtable, 0);
+	FromExpr *fromexpr;
+	Var *result;
+	rte->relid = mattbladdress->objectId;
+	rte->rtekind = RTE_RELATION;
+	rte->relkind = RELKIND_RELATION;
+	rte->tablesample = NULL;
+	rte->eref->colnames = NIL;
+	// aliases for column names for the materialization table
+	foreach (lc, cxt->matcollist)
+	{
+		ColumnDef *cdef = (ColumnDef *) lfirst(lc);
+		Value *attrname = makeString(cdef->colname);
+		rte->eref->colnames = lappend(rte->eref->colnames, attrname);
+	}
+	rte->insertedCols = NULL;
+	rte->updatedCols = NULL;
+	result = makeWholeRowVar(rte, 1, 0, true);
+	result->location = 0;
+	markVarForSelectPriv(NULL, result, rte);
+	/* 2. Fixup targetlist with the correct rel information */
+	foreach (lc, cxt->seltlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+		if (IsA(tle->expr, Var))
+		{
+			tle->resorigtbl = rte->relid;
+			tle->resorigcol = ((Var *) tle->expr)->varattno;
+		}
+	}
+	// fixu correct resname as well
+	if (tlist_aliases != NIL)
+	{
+		ListCell *alist_item = list_head(tlist_aliases);
+		foreach (lc, cxt->seltlist)
+		{
+			TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+			/* junk columns don't get aliases */
+			if (tle->resjunk)
+				continue;
+			tle->resname = pstrdup(strVal(lfirst(alist_item)));
+			alist_item = lnext(alist_item);
+			if (alist_item == NULL)
+				break; /* done assigning aliases */
+		}
+
+		if (alist_item != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("too many column names were specified")));
+	}
+	selquery->targetList = cxt->seltlist;
+	/* fixup from list. no quals on original table should be
+	 * present here - is this assumption correct TODO ???
+	 */
+	Assert(list_length(selquery->jointree->fromlist) == 1);
+	fromexpr = selquery->jointree;
+	fromexpr->quals = NULL;
+	/* TODO need to check groupby clause, what if we have a aggref here
+	 * also having clause
+	 */
+	return selquery;
+}
+
+/* Modifies the passed in ViewStmt to do the following
+ * a) Create a hypertable for the continuous agg materialization.
+ * b) create a view that references the underlying
+ * materialization table instead of the original table used in
+ * the CREATE VIEW stmt.
+ * Example:
+ * CREATE VIEW mcagg ...
+ * AS  select a, min(b)+max(d) from foo group by a,timebucket(a);
+ * Step1. create a materialiation table which stores the partials for the
+ * aggregates and the grouping columns + internal columns.
+ * So we have a table like ts_internal_mcagg
+ * with columns:
+ *( internal-columns , a, partialize(min(b)), partialize(max(d)), timebucket(a))
+ * Step2: Create a view with modified select query
+ * CREATE VIEW mcagg
+ * as
+ * select a, finalize( partialize(min(b)) + finalize(partialize(max(d))
+ * from ts_internal_mcagg
+ * group by a, timebucket(a)
  *
- * This code is similar to the create_ctas_nodata path.
- * We need custom code because we define additional columns besides
- * what is defined in the query->targetList.
+ * Notes: ViewStmt->query is the raw parse tree
+ * panquery is the output of runningparse_anlayze( ViewStmt->query)
  */
 void
-cagg_create_mattbl(CreateTableAsStmt *stmt)
+cagg_create(ViewStmt *stmt, Query *panquery)
 {
 #define BUFLEN 100
 	ObjectAddress address;
-	ObjectAddress mataddress;
-	Datum toast_options;
+	// Datum toast_options;
 	List *attrList = NIL;
-	ListCell *t;
+	ListCell *lc;
 	int colcnt = 0;
-	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
+	// static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 	char buf[BUFLEN];
+	Query *selquery;
+	List *selcollist;
 	CreateStmt *create;
-	Query *view_query;
-	Query *orig_query;
+	Query *origquery;
 	AggPartCxt cxt;
 	List *origcolmap;
 	int resno = 1;
@@ -342,15 +407,15 @@ cagg_create_mattbl(CreateTableAsStmt *stmt)
 	 * in the table defintion so we include group-by/having clause etc.
 	 * TODO are the tlist entries distinct?
 	 */
-	orig_query = (Query *) copyObject(stmt->query);
+	origquery = (Query *) copyObject(panquery);
 	cxt.matcollist = attrList;
 	cxt.seltlist = NIL;
 	cxt.origcolmap = origcolmap;
 	// TODO sum(c) + sum(d) should become
 	// partialize(sum(c) ), partialize(sum(d))
-	foreach (t, ((Query *) stmt->query)->targetList)
+	foreach (lc, ((Query *) panquery)->targetList)
 	{
-		TargetEntry *tle = (TargetEntry *) lfirst(t);
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
 		TargetEntry *modte = copyObject(tle);
 		cxt.addcol = false;
 		modte = (TargetEntry *) expression_tree_mutator((Node *) tle,
@@ -414,178 +479,84 @@ cagg_create_mattbl(CreateTableAsStmt *stmt)
 			cxt.seltlist = lappend(cxt.seltlist, modte);
 		}
 	}
-	/* create a dummy MATVIEW */
-	{
-		ListCell *lc = list_head(stmt->into->colNames);
-		ColumnDef *col;
-		List *attrlist = NIL;
-		foreach (t, orig_query->targetList)
-		{
-			TargetEntry *tle = (TargetEntry *) lfirst(t);
-			ColumnDef *col;
-			char *colname;
-			if (!tle->resjunk && lc)
-			{
-				colname = strVal(lfirst(lc));
-				lc = lnext(lc);
-			}
-			else
-			{
-				snprintf(buf, BUFLEN, "tscol%d", colcnt);
-				colname = buf;
-			}
-			if (!tle->resjunk)
-			{
-				col = makeColumnDef(colname,
-									exprType((Node *) tle->expr),
-									exprTypmod((Node *) tle->expr),
-									exprCollation((Node *) tle->expr));
-				attrlist = lappend(attrlist, col);
-			}
-		}
-		if (lc != NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("too many column names were specified")));
-		stmt->into->options = NULL;
-		create = makeNode(CreateStmt);
-		create->relation = stmt->into->rel;
-		create->tableElts = attrlist;
-		create->inhRelations = NIL;
-		create->ofTypename = NULL;
-		create->constraints = NIL;
-		create->options = stmt->into->options;
-		create->oncommit = stmt->into->onCommit;
-		create->tablespacename = stmt->into->tableSpaceName;
-		create->if_not_exists = false; /* TODO */
-		mataddress = DefineRelation(create, RELKIND_MATVIEW, InvalidOid, NULL, NULL);
-	}
 
 	/*
-	 * Create the hypertable root by faking up a CREATE TABLE parsetree and
-	 * passing it to DefineRelation.
+	 * Create the materialization hypertable root by faking up a
+	 * CREATE TABLE parsetree and passing it to DefineRelation.
 	 * Remove the options on the into clause that we will not honour
-	 * clause. Modify the relname as well
+	 * Modify the relname to ts_internal_<name>
 	 */
-	// TODO should the mat table be in the same schema??
+	// TODO should the mat table be in the same schema,
+	// TODO convert this to a hypertable??
 	{
-		RangeVar *old_rel = stmt->into->rel;
-		RangeVar *new_rel = copyObject(stmt->into->rel);
+		RangeVar *old_rel = stmt->view;
+		RangeVar *new_rel = copyObject(old_rel);
 		snprintf(buf, BUFLEN, "ts_internal_%s", old_rel->relname);
 		new_rel->relname = buf;
-		stmt->into->rel = new_rel;
+		stmt->options = NULL;
 
-		stmt->into->options = NULL;
 		create = makeNode(CreateStmt);
-		create->relation = stmt->into->rel;
+		create->relation = new_rel;
 		create->tableElts = cxt.matcollist;
 		create->inhRelations = NIL;
 		create->ofTypename = NULL;
 		create->constraints = NIL;
-		create->options = stmt->into->options;
-		create->oncommit = stmt->into->onCommit;
-		create->tablespacename = stmt->into->tableSpaceName;
-		create->if_not_exists = false; /* TODO */
+		create->options = NULL;
+		create->oncommit = ONCOMMIT_NOOP;
+		create->tablespacename = NULL; // TODO what is the default?
+		create->if_not_exists = false;
 
 		/*  Create the materialization table.
-		 *  (This will error out if one already exists
 		 *  TODO : do we need to pass ownerid here?
 		 */
-		// address = DefineRelation(create, RELKIND_MATVIEW, InvalidOid, NULL, NULL);
 		address = DefineRelation(create, RELKIND_RELATION, InvalidOid, NULL, NULL);
 		CommandCounterIncrement();
 	}
-	/* now lets construct the select query for the materialization table
+	/* construct the select query for the materialization table
+	 * created above and create the view
 	 */
+	selquery = createSelQueryForMatTbl(origquery, &cxt, &address, stmt->aliases);
+	foreach (lc, selquery->targetList)
 	{
-		Query *selquery = copyObject(orig_query);
-		// we have only 1 entry in rtable -checked during query validation
-		// modify this to reflect the materialization table
-		// we just created.
-		RangeTblEntry *rte = list_nth(selquery->rtable, 0);
-		FromExpr *fromexpr;
-		rte->relid = address.objectId;
-		rte->rtekind = RTE_RELATION;
-		rte->relkind = RELKIND_RELATION;
-		rte->tablesample = NULL;
-		// aliases for column names
-		rte->eref->colnames = NIL;
-		foreach (t, cxt.matcollist)
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+		if (!tle->resjunk)
 		{
-			ColumnDef *cdef = (ColumnDef *) lfirst(t);
-			Value *attrname = makeString(cdef->colname);
-			rte->eref->colnames = lappend(rte->eref->colnames, attrname);
+			ColumnDef *col = makeColumnDef(tle->resname,
+										   exprType((Node *) tle->expr),
+										   exprTypmod((Node *) tle->expr),
+										   exprCollation((Node *) tle->expr));
+			selcollist = lappend(selcollist, col);
 		}
-		rte->insertedCols = NULL;
-		rte->updatedCols = NULL;
-		/* mark the whole row as needing select privileges */
-		/*{
-				Var *result = makeWholeRowVar(rte, 1, 0, true);
-				result->location = 0;
-				markVarForSelectPriv(NULL, result, rte);
-			}
-		*/
-		/* 2. Fixup targetlist with the correct rel information */
-		foreach (t, cxt.seltlist)
-		{
-			TargetEntry *tle = (TargetEntry *) lfirst(t);
-			if (IsA(tle->expr, Var))
-			{
-				tle->resorigtbl = rte->relid;
-				tle->resorigcol = ((Var *) tle->expr)->varattno;
-			}
-		}
-		// fixu correct resname as well
-		Assert(stmt->into->colNames); // TODO check this in query validation
-		if (stmt->into->colNames != NIL)
-		{
-			ListCell *alist_item = list_head(stmt->into->colNames);
-
-			foreach (t, cxt.seltlist)
-			{
-				TargetEntry *tle = (TargetEntry *) lfirst(t);
-
-				/* junk columns don't get aliases */
-				if (tle->resjunk)
-					continue;
-				tle->resname = pstrdup(strVal(lfirst(alist_item)));
-				alist_item = lnext(alist_item);
-				if (alist_item == NULL)
-					break; /* done assigning aliases */
-			}
-
-			if (alist_item != NULL)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("too many column names were specified")));
-		}
-		selquery->targetList = cxt.seltlist;
-		/* fixup from list. no quals on original table should be
-		 * present here - is this assumption correct TODO ???
-		 */
-		Assert(list_length(selquery->jointree->fromlist) == 1);
-		fromexpr = selquery->jointree;
-		fromexpr->quals = NULL;
-		/* need to check groupby clause, what if we have a aggref here
-		 * also having clause
-		 */
-		//		StoreViewQuery(address.objectId, selquery, false);
-		StoreViewQuery(mataddress.objectId, selquery, false);
-		CommandCounterIncrement(); //??TODO???
-		return;
 	}
-	// modquery = finalizeSelectQuery(  orig_query , attrList);
+	create = makeNode(CreateStmt);
+	create->relation = stmt->view;
+	create->tableElts = selcollist;
+	create->inhRelations = NIL;
+	create->ofTypename = NULL;
+	create->constraints = NIL;
+	create->options = NULL;
+	create->oncommit = ONCOMMIT_NOOP;
+	create->tablespacename = NULL; // TODO what is the default?
+	create->if_not_exists = false;
+
+	/*  Create the materialization table.
+	 *  TODO : do we need to pass ownerid here?
+	 */
+	address = DefineRelation(create, RELKIND_VIEW, InvalidOid, NULL, NULL);
+	CommandCounterIncrement();
+	// DefineView( stmt, -1,
+	StoreViewQuery(address.objectId, selquery, false);
+	CommandCounterIncrement();
 
 	return;
 
 	// TODO
 
 	/* NewRelationCreateToastTable calls CommandCounterIncrement */
-	toast_options =
-		transformRelOptions((Datum) 0, create->options, "toast", validnsps, true, false);
-	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
-	NewRelationCreateToastTable(address.objectId, toast_options);
-	view_query = (Query *) copyObject(stmt->into->viewQuery);
+	// toast_options =
+	//		transformRelOptions((Datum) 0, create->options, "toast", validnsps, true, false);
+	//	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
+	//	NewRelationCreateToastTable(address.objectId, toast_options);
 
 	/* TODO when do we need a TOAST table ??? */
 

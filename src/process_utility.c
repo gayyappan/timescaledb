@@ -30,6 +30,7 @@
 #include <utils/guc.h>
 #include <utils/snapmgr.h>
 #include <parser/parse_utilcmd.h>
+#include <parser/analyze.h>
 #include <commands/tablespace.h>
 
 #include <catalog/pg_constraint.h>
@@ -2073,23 +2074,21 @@ process_create_trigger_end(Node *parsetree)
 }
 
 static bool
-process_ctas(ProcessUtilityArgs *args)
+process_viewstmt(ProcessUtilityArgs *args)
 {
 	Node *parsetree = args->parsetree;
 	char *tsctas_opts[] = { "ts_continuous" }; //, "ts_refresh"
-	CreateTableAsStmt *stmt = (CreateTableAsStmt *) parsetree;
-	Query *query = castNode(Query, stmt->query);
-	// bool            is_matview = (into->viewQuery != NULL);
+	ViewStmt *stmt = (ViewStmt *) parsetree;
+	RawStmt *rawstmt = NULL;
+	Query *query = NULL;
 	Oid relid, nspid;
 	bool is_cagg = false;
 	int optcnt = 0;
 	List *defList;
 	ListCell *cell;
-	Assert(IsA(parsetree, CreateTableAsStmt));
-	if (stmt->relkind != OBJECT_MATVIEW)
-		return false;
+	Assert(IsA(parsetree, ViewStmt));
 	/* is this a continuous agg */
-	defList = stmt->into->options;
+	defList = stmt->options;
 	foreach (cell, defList)
 	{
 		DefElem *def = (DefElem *) lfirst(cell);
@@ -2108,22 +2107,31 @@ process_ctas(ProcessUtilityArgs *args)
 				 errmsg("Invalid parameter list in WITH CLAUSE for continuous aggs")));
 	}
 
-	query = castNode(Query, stmt->query);
+	/* we have a continuous aggregate query. convert to Query structure
+	 */
+	rawstmt = makeNode(RawStmt);
+	rawstmt->stmt = (Node *) copyObject(stmt->query);
+	rawstmt->stmt_location = args->pstmt->stmt_location;
+	rawstmt->stmt_len = args->pstmt->stmt_len;
+	query = parse_analyze(rawstmt, args->query_string, NULL, 0, NULL);
+
 	cagg_validate_query(query);
 
-	nspid = RangeVarGetCreationNamespace(stmt->into->rel);
-	relid = get_relname_relid(stmt->into->rel->relname, nspid);
-	if (stmt->if_not_exists)
+	nspid = RangeVarGetCreationNamespace(stmt->view);
+	relid = get_relname_relid(stmt->view->relname, nspid);
+	if (stmt->replace)
 	{
-		if (get_relname_relid(stmt->into->rel->relname, nspid))
+		if (get_relname_relid(stmt->view->relname, nspid))
 		{
 			ereport(NOTICE,
 					(errcode(ERRCODE_DUPLICATE_TABLE),
-					 errmsg("relation \"%s\" already exists, skipping", stmt->into->rel->relname)));
+					 errmsg("Continuous aggs \"%s\" already exists, drop and recreate if needed. "
+							"This will drop the underlying materialization",
+							stmt->view->relname)));
 			return true;
 		}
 	}
-	cagg_create_mattbl(stmt);
+	cagg_create(stmt, query);
 	return true;
 }
 
@@ -2189,8 +2197,8 @@ process_ddl_command_start(ProcessUtilityArgs *args)
 		case T_ClusterStmt:
 			handled = process_cluster_start(args->parsetree, args->context);
 			break;
-		case T_CreateTableAsStmt:
-			handled = process_ctas(args); //->parsetree);
+		case T_ViewStmt:
+			handled = process_viewstmt(args); //->parsetree);
 			break;
 		default:
 			break;
