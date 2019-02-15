@@ -119,10 +119,9 @@ create_finalize_agg(Aggref *inp, Var *inpcol)
 {
 #define FINALFN "ts_internal_cagg_final"
 	Aggref *aggref;
-	HeapTuple oidtup;
-	Form_pg_type oidform;
 	TargetEntry *te;
 	Const *oid1arg, *oid2arg, *nullarg;
+	RelabelType *oid1arg_conv, *oid2arg_conv;
 	Var *bytearg;
 	List *tlist = NIL;
 	int tlist_attno = 1;
@@ -137,7 +136,7 @@ create_finalize_agg(Aggref *inp, Var *inpcol)
 	argtypes = lappend_oid(argtypes, OIDOID);
 	argtypes = lappend_oid(argtypes, OIDOID);
 	argtypes = lappend_oid(argtypes, BYTEAOID);
-	argtypes = lappend_oid(argtypes, ANYELEMENTOID);
+	argtypes = lappend_oid(argtypes, inp->aggtype);
 	aggref = makeNode(Aggref);
 	aggref->aggfnoid = finalfnoid;
 	aggref->aggtype = inp->aggtype; // TODO finalrettype;
@@ -155,37 +154,37 @@ create_finalize_agg(Aggref *inp, Var *inpcol)
 	aggref->aggsplit = AGGSPLIT_SIMPLE; // TODO make sure plannerdoes not change this ???
 	aggref->location = -1;				// unknown
 										/* construct the arguments */
-	oidtup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(OIDOID));
-	if (!HeapTupleIsValid(oidtup))
-		elog(ERROR, "cache lookup failed for type OIDOID");
-	oidform = (Form_pg_type) GETSTRUCT(oidtup);
-
-	oid1arg = makeConst(OIDOID,
+	oid1arg = makeConst(INT4OID,
 						-1,
 						InvalidOid,
-						oidform->typlen,
+						sizeof(int32),
+						//	oidform->typlen,
 						ObjectIdGetDatum(inp->aggfnoid),
 						false,
 						true // passbyval TODO
 	);
-	te = makeTargetEntry((Expr *) oid1arg, tlist_attno++, NULL, true);
+	oid1arg_conv = makeRelabelType((Expr *) oid1arg, OIDOID, -1, InvalidOid, COERCE_IMPLICIT_CAST);
+
+	te = makeTargetEntry((Expr *) oid1arg_conv, tlist_attno++, NULL, true);
 	tlist = lappend(tlist, te);
 	// TODO should resno be false???
-	oid2arg = makeConst(OIDOID,
+	oid2arg = makeConst(INT4OID,
 						-1,
 						InvalidOid,
-						oidform->typlen,
+						sizeof(int32),
+						// oidform->typlen,
 						ObjectIdGetDatum(inp->inputcollid),
 						false,
 						true // passbyval TODO
 	);
-	te = makeTargetEntry((Expr *) oid2arg, tlist_attno++, NULL, true);
+	oid2arg_conv = makeRelabelType((Expr *) oid2arg, OIDOID, -1, InvalidOid, COERCE_IMPLICIT_CAST);
+	te = makeTargetEntry((Expr *) oid2arg_conv, tlist_attno++, NULL, true);
 	tlist = lappend(tlist, te);
 	bytearg = copyObject(inpcol);
 	te = makeTargetEntry((Expr *) bytearg, tlist_attno++, NULL, true);
 	tlist = lappend(tlist, te);
 	// TODO what is the collation id here?
-	nullarg = makeNullConst(aggref->aggtype, -1, inp->aggcollid);
+	nullarg = makeNullConst(inp->aggtype, -1, inp->aggcollid);
 	te = makeTargetEntry((Expr *) nullarg, tlist_attno++, NULL, true);
 	tlist = lappend(tlist, te);
 	Assert(tlist_attno == 5);
@@ -248,13 +247,8 @@ add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
 		/* step 2: create expr for call to
 		 * ts_internal_cagg_final( oid, oid, matcol, null)
 		 */
-		//	varattnos start at 1.
-		var = makeVar(1,
-					  matcolno,
-					  exprType((Node *) fexpr),
-					  exprTypmod((Node *) fexpr),
-					  exprCollation((Node *) fexpr),
-					  0);
+		/* This is a var for the column we created */
+		var = makeVar(1, matcolno, BYTEAOID, -1, InvalidOid, 0);
 		newagg = create_finalize_agg((Aggref *) node, var);
 		return (Node *) newagg;
 #undef BUFLEN
