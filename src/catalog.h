@@ -44,6 +44,7 @@ typedef enum CatalogTable
 	BGW_POLICY_REORDER,
 	BGW_POLICY_DROP_CHUNKS,
 	BGW_POLICY_CHUNK_STATS,
+	CQUERY_DETAIL,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -771,6 +772,23 @@ typedef struct FormData_bgw_policy_chunk_stats_job_id_chunk_id_idx
 	int32 job_id;
 	int32 chunk_id;
 } FormData_bgw_policy_chunk_stats_job_id_chunk_id_idx;
+
+/******************************
+ *
+ * continuous query metadata table definitions
+ *
+ ******************************/
+#define CQUERY_DETAIL_TABLE_NAME "cquery_detail"
+enum Anum_cquery_detail
+{
+	Anum_tbloid = 1,
+	Anum_cquery_schema_name,
+	Anum_cquery_table_name,
+	Anum_cquery_partial_query,
+	_Anum_cquery_max
+};
+
+#define Natts_cquery_detail (_Anum_cquery_max - 1)
 
 /*
  * The maximum number of indexes a catalog table can have.

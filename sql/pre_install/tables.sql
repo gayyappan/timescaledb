@@ -148,6 +148,14 @@ CREATE INDEX IF NOT EXISTS chunk_index_hypertable_id_hypertable_index_name_idx
 ON _timescaledb_catalog.chunk_index(hypertable_id, hypertable_index_name);
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '');
 
+CREATE TABLE IF NOT EXISTS _timescaledb_catalog.cquery_detail (
+    --mathypertable_id         INTEGER NOT NULL REFERENCES _timescaledb_catalog.hypertable(id) ON DELETE CASCADE,
+   tbloid Oid NOT NULL,
+    schema_name     NAME    NOT NULL,
+    table_name      NAME    NOT NULL,
+	partial_query pg_node_tree
+--	UNIQUE( mathypertable_id)
+);
 -- Default jobs are given the id space [1,1000). User-installed jobs and any jobs created inside tests
 -- are given the id space [1000, INT_MAX). That way, we do not pg_dump jobs that are always default-installed
 -- inside other .sql scripts. This avoids insertion conflicts during pg_restore.

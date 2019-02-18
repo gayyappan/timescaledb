@@ -21,6 +21,49 @@
 #include <cont_agg.h>
 #include <parser/parse_func.h>
 #include <parser/parse_relation.h> /*markVarForSelectPriv */
+#include <utils/builtins.h>
+
+typedef struct AggPartCxt
+{
+	List *matcollist;		/* column defns for materialization tbl*/
+	List *final_seltlist;   /* tlist entries for SELECT from materialization*/
+	List *partial_seltlist; /* tlist entries for populating mat table */
+	List *origcolmap;
+	bool addcol;
+} AggPartCxt;
+
+static void
+create_catalog_entry_mattbl(Oid mattbloid, char *matschema_name, char *mattbl_name,
+							Query *partial_query)
+{
+	Catalog *catalog = ts_catalog_get();
+	Relation rel;
+	TupleDesc desc;
+	NameData schname, tblname;
+	Datum values[Natts_cquery_detail];
+	bool nulls[Natts_cquery_detail] = { false };
+	CatalogSecurityContext sec_ctx;
+	char *querystr = nodeToString(partial_query);
+
+	namestrcpy(&schname, matschema_name);
+	namestrcpy(&tblname, mattbl_name);
+	rel = heap_open(catalog_get_table_id(catalog, CQUERY_DETAIL), RowExclusiveLock);
+	desc = RelationGetDescr(rel);
+
+	memset(values, 0, sizeof(values));
+	// values[AttrNumberGetAttrOffset(Anum_cquery_hypertable_id)] =
+	//                Int32GetDatum(chunk->fd.hypertable_id);
+	// TODO replace oid with hypertable_id
+	values[AttrNumberGetAttrOffset(Anum_tbloid)] = ObjectIdGetDatum(mattbloid);
+	values[AttrNumberGetAttrOffset(Anum_cquery_schema_name)] = NameGetDatum(&schname);
+	values[AttrNumberGetAttrOffset(Anum_cquery_table_name)] = NameGetDatum(&tblname);
+	values[AttrNumberGetAttrOffset(Anum_cquery_partial_query)] = CStringGetTextDatum(querystr);
+
+	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
+	ts_catalog_insert_values(rel, desc, values, nulls);
+	ts_catalog_restore_user(&sec_ctx);
+	heap_close(rel, RowExclusiveLock);
+}
 
 void
 cagg_validate_query(Query *query)
@@ -209,14 +252,6 @@ get_partialize_func_info(Aggref *agg)
 	return partialize_fnexpr;
 }
 
-typedef struct AggPartCxt
-{
-	List *matcollist; /* column defns for materialization tbl*/
-	List *seltlist;   /* tlist entries for modified SELECT */
-	List *origcolmap;
-	bool addcol;
-} AggPartCxt;
-
 static Node *
 add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
 {
@@ -244,6 +279,7 @@ add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
 		col = makeColumnDef(colname, BYTEAOID, -1, InvalidOid);
 		cxt->matcollist = lappend(cxt->matcollist, col);
 		cxt->addcol = true;
+		cxt->partial_seltlist = lappend(cxt->partial_seltlist, fexpr);
 		/* step 2: create expr for call to
 		 * ts_internal_cagg_final( oid, oid, matcol, null)
 		 */
@@ -256,7 +292,7 @@ add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
 	return expression_tree_mutator(node, add_aggregate_partialize_mutator, cxt);
 }
 
-/* Make a slect query for the materialization table
+/* Make a select query for the materialization table
  * origquery - query passed to create view
  * mattbladdress - materialization table ObjectAddress
  * tlist_aliases - aliases for targetlist entries
@@ -265,13 +301,14 @@ static Query *
 createSelQueryForMatTbl(Query *origquery, AggPartCxt *cxt, ObjectAddress *mattbladdress,
 						List *tlist_aliases)
 {
+	// char *selstr = NULL;
 	ListCell *lc;
-	Query *selquery = copyObject(origquery);
+	Query *final_selquery = copyObject(origquery);
 	/* we have only 1 entry in rtable -checked during query validation
 	 * modify this to reflect the materialization table we just
 	 * created.
 	 */
-	RangeTblEntry *rte = list_nth(selquery->rtable, 0);
+	RangeTblEntry *rte = list_nth(final_selquery->rtable, 0);
 	FromExpr *fromexpr;
 	Var *result;
 	rte->relid = mattbladdress->objectId;
@@ -292,7 +329,7 @@ createSelQueryForMatTbl(Query *origquery, AggPartCxt *cxt, ObjectAddress *mattbl
 	result->location = 0;
 	markVarForSelectPriv(NULL, result, rte);
 	/* 2. Fixup targetlist with the correct rel information */
-	foreach (lc, cxt->seltlist)
+	foreach (lc, cxt->final_seltlist)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
 		if (IsA(tle->expr, Var))
@@ -305,7 +342,7 @@ createSelQueryForMatTbl(Query *origquery, AggPartCxt *cxt, ObjectAddress *mattbl
 	if (tlist_aliases != NIL)
 	{
 		ListCell *alist_item = list_head(tlist_aliases);
-		foreach (lc, cxt->seltlist)
+		foreach (lc, cxt->final_seltlist)
 		{
 			TargetEntry *tle = (TargetEntry *) lfirst(lc);
 
@@ -323,17 +360,18 @@ createSelQueryForMatTbl(Query *origquery, AggPartCxt *cxt, ObjectAddress *mattbl
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("too many column names were specified")));
 	}
-	selquery->targetList = cxt->seltlist;
+	final_selquery->targetList = cxt->final_seltlist;
 	/* fixup from list. no quals on original table should be
 	 * present here - is this assumption correct TODO ???
 	 */
-	Assert(list_length(selquery->jointree->fromlist) == 1);
-	fromexpr = selquery->jointree;
+	Assert(list_length(final_selquery->jointree->fromlist) == 1);
+	fromexpr = final_selquery->jointree;
 	fromexpr->quals = NULL;
 	/* TODO need to check groupby clause, what if we have a aggref here
 	 * also having clause
 	 */
-	return selquery;
+	// selstr = nodeToString(final_selquery);
+	return final_selquery;
 }
 
 /* Modifies the passed in ViewStmt to do the following
@@ -363,19 +401,21 @@ void
 cagg_create(ViewStmt *stmt, Query *panquery)
 {
 #define BUFLEN 100
-	ObjectAddress address;
+	ObjectAddress address, mataddress;
 	// Datum toast_options;
 	List *attrList = NIL;
 	ListCell *lc;
 	int colcnt = 0;
 	// static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 	char buf[BUFLEN];
-	Query *selquery;
-	List *selcollist;
+	Query *final_selquery;
+	Query *partial_selquery; /* query to populate the mattable*/
+	List *selcollist = NIL;
 	CreateStmt *create;
 	Query *origquery;
 	AggPartCxt cxt;
 	List *origcolmap;
+	RangeVar *mat_rel = NULL;
 	int resno = 1;
 	/* Modify the INTO clause reloptions
 	 * 1. remove timesacle specific options.
@@ -403,10 +443,9 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 	 */
 	origquery = (Query *) copyObject(panquery);
 	cxt.matcollist = attrList;
-	cxt.seltlist = NIL;
+	cxt.final_seltlist = NIL;
+	cxt.partial_seltlist = NIL;
 	cxt.origcolmap = origcolmap;
-	// TODO sum(c) + sum(d) should become
-	// partialize(sum(c) ), partialize(sum(d))
 	foreach (lc, ((Query *) panquery)->targetList)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
@@ -436,6 +475,7 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 								exprTypmod((Node *) tle->expr),
 								exprCollation((Node *) tle->expr));
 			cxt.matcollist = lappend(cxt.matcollist, col);
+			cxt.partial_seltlist = lappend(cxt.partial_seltlist, copyObject(tle));
 			var = makeVar(1,
 						  matcolno,
 						  exprType((Node *) tle->expr),
@@ -464,13 +504,13 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 			 */
 			Assert(modte->resno == resno);
 			resno++;
-			// push this to later and add resorigtbl info
+			// TODO push this to later and add resorigtbl info
 			// and adjust resnames to the correct one as well.
 			if (IsA(modte->expr, Var))
 			{
 				modte->resorigcol = ((Var *) modte->expr)->varattno;
 			}
-			cxt.seltlist = lappend(cxt.seltlist, modte);
+			cxt.final_seltlist = lappend(cxt.final_seltlist, modte);
 		}
 	}
 
@@ -484,13 +524,13 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 	// TODO convert this to a hypertable??
 	{
 		RangeVar *old_rel = stmt->view;
-		RangeVar *new_rel = copyObject(old_rel);
+		mat_rel = copyObject(old_rel);
 		snprintf(buf, BUFLEN, "ts_internal_%s", old_rel->relname);
-		new_rel->relname = buf;
+		mat_rel->relname = buf;
 		stmt->options = NULL;
 
 		create = makeNode(CreateStmt);
-		create->relation = new_rel;
+		create->relation = mat_rel;
 		create->tableElts = cxt.matcollist;
 		create->inhRelations = NIL;
 		create->ofTypename = NULL;
@@ -503,14 +543,14 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 		/*  Create the materialization table.
 		 *  TODO : do we need to pass ownerid here?
 		 */
-		address = DefineRelation(create, RELKIND_RELATION, InvalidOid, NULL, NULL);
+		mataddress = DefineRelation(create, RELKIND_RELATION, InvalidOid, NULL, NULL);
 		CommandCounterIncrement();
 	}
 	/* construct the select query for the materialization table
 	 * created above and create the view
 	 */
-	selquery = createSelQueryForMatTbl(origquery, &cxt, &address, stmt->aliases);
-	foreach (lc, selquery->targetList)
+	final_selquery = createSelQueryForMatTbl(origquery, &cxt, &mataddress, stmt->aliases);
+	foreach (lc, final_selquery->targetList)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
 		if (!tle->resjunk)
@@ -538,9 +578,26 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 	 */
 	address = DefineRelation(create, RELKIND_VIEW, InvalidOid, NULL, NULL);
 	CommandCounterIncrement();
-	// DefineView( stmt, -1,
-	StoreViewQuery(address.objectId, selquery, false);
+	StoreViewQuery(address.objectId, final_selquery, false);
 	CommandCounterIncrement();
+
+	/* create the query with select partialize(..)
+	 *remove HAVING clause and TODO --- ORDER BY
+	 */
+	partial_selquery = copyObject(panquery);
+	partial_selquery->targetList = cxt.partial_seltlist;
+	partial_selquery->havingQual = NULL;
+
+	Assert(mat_rel != NULL);
+	// TODO need to fill in correct schema name here, mat_rel->schemaname could be invalid.
+	create_catalog_entry_mattbl(mataddress.objectId,
+								// mat_rel->schemaname,
+								"test",
+								mat_rel->relname,
+								partial_selquery);
+	/* record dependency: view depends on materialization table */
+	// TODO any other dependencies??
+	recordDependencyOn(&mataddress, &address, DEPENDENCY_INTERNAL);
 
 	return;
 
