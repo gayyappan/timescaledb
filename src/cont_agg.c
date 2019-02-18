@@ -589,9 +589,9 @@ cagg_create(ViewStmt *stmt, Query *panquery)
 	partial_selquery->havingQual = NULL;
 
 	Assert(mat_rel != NULL);
-	//TODO need to fill in correct schema name here, mat_rel->schemaname could be invalid.
+	// TODO need to fill in correct schema name here, mat_rel->schemaname could be invalid.
 	create_catalog_entry_mattbl(mataddress.objectId,
-								//mat_rel->schemaname,
+								// mat_rel->schemaname,
 								"test",
 								mat_rel->relname,
 								partial_selquery);
