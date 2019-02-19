@@ -783,8 +783,9 @@ enum Anum_cquery_detail
 {
 	Anum_tbloid = 1,
 	Anum_cquery_schema_name,
-	Anum_cquery_table_name,
-	Anum_cquery_partial_query,
+	Anum_cquery_mattable_name,
+	Anum_cquery_internal_viewname,
+	Anum_cquery_user_viewname,
 	_Anum_cquery_max
 };
 

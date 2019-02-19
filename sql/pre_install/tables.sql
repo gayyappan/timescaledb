@@ -150,10 +150,11 @@ SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '
 
 CREATE TABLE IF NOT EXISTS _timescaledb_catalog.cquery_detail (
     --mathypertable_id         INTEGER NOT NULL REFERENCES _timescaledb_catalog.hypertable(id) ON DELETE CASCADE,
-   tbloid Oid NOT NULL,
-    schema_name     NAME    NOT NULL,
-    table_name      NAME    NOT NULL,
-	partial_query pg_node_tree
+   mattbloid Oid NOT NULL,
+   schema_name     NAME    NOT NULL,
+   mattable_name      NAME    NOT NULL,
+   internal_viewname       NAME NOT NULL,
+   user_viewname	NAME NOT NULL
 --	UNIQUE( mathypertable_id)
 );
 -- Default jobs are given the id space [1,1000). User-installed jobs and any jobs created inside tests
