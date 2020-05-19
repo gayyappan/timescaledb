@@ -74,6 +74,7 @@ typedef struct FACombineFnMeta
 	Oid transtype;
 	Oid recv_fn;
 	Oid typIOParam;
+	Oid collation;
 	FmgrInfo deserialfn;
 	FmgrInfo internal_deserialfn;
 	FmgrInfo combinefn;
@@ -303,6 +304,7 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 	tstate->combine_meta.combinefnoid = inner_agg_form->aggcombinefn;
 	tstate->combine_meta.deserialfnoid = inner_agg_form->aggdeserialfn;
 	tstate->combine_meta.transtype = inner_agg_form->aggtranstype;
+	tstate->combine_meta.collation = collation;
 	ReleaseSysCache(inner_agg_tuple);
 
 	/* initialize combine specific state, both the deserialize function and combine function */
