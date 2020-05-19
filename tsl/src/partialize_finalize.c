@@ -90,6 +90,8 @@ typedef struct FACombineFnMeta
 typedef struct FAFinalFnMeta
 {
 	Oid finalfnoid;
+	int aggfinalextra_num_args;
+	Oid *aggfinalextra_arg_types;
 	FmgrInfo finalfn;
 	FunctionCallInfo finalfn_fcinfo;
 } FAFinalFnMeta;
@@ -119,6 +121,9 @@ typedef struct FATransitionState
 	FAPerQueryState *per_query_state;
 	FAPerGroupState *per_group_state;
 } FATransitionState;
+
+static void fa_perquery_state_executor_state_init(FAPerQueryState *tstate, AggState *fa_aggstate,
+												  MemoryContext qcontext);
 
 static Oid
 aggfnoid_from_aggname(text *aggfn)
@@ -288,6 +293,7 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 	MemoryContext qcontext = fcinfo->flinfo->fn_mcxt;
 	MemoryContext oldcontext = MemoryContextSwitchTo(qcontext);
 	AggState *fa_aggstate = (AggState *) fcinfo->context;
+	size_t number_types = 0;
 
 	/* look up catalog entry and populate what we need */
 	inner_agg_tuple = SearchSysCache1(AGGFNOID, inner_agg_fn_oid);
@@ -306,19 +312,40 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 	tstate->combine_meta.deserialfnoid = inner_agg_form->aggdeserialfn;
 	tstate->combine_meta.transtype = inner_agg_form->aggtranstype;
 	tstate->combine_meta.collation = collation;
-	ReleaseSysCache(inner_agg_tuple);
+	tstate->final_meta.aggfinalextra_num_args = 0;
+	if (inner_agg_form->aggfinalextra)
+	{
+		tstate->final_meta.aggfinalextra_arg_types = get_input_types(input_types, &number_types);
+		tstate->final_meta.aggfinalextra_num_args = (int) number_types;
+	}
+	if (OidIsValid(tstate->final_meta.finalfnoid) &&
+		(get_func_nargs(tstate->final_meta.finalfnoid) != (number_types + 1)))
+		elog(ERROR, "invalid number of input types");
 
 	/* initialize combine specific state, both the deserialize function and combine function */
 	if (!OidIsValid(tstate->combine_meta.combinefnoid))
 		elog(ERROR,
 			 "no valid combine function for the aggregate specified in Timescale finalize call");
+	ReleaseSysCache(inner_agg_tuple);
+	fa_perquery_state_executor_state_init(tstate, fa_aggstate, qcontext);
+	fcinfo->flinfo->fn_extra = (void *) tstate;
 
+	MemoryContextSwitchTo(oldcontext);
+
+	return tstate;
+}
+
+// initialize executor state information for FQPerQueryState
+static void
+fa_perquery_state_executor_state_init(FAPerQueryState *tstate, AggState *fa_aggstate,
+									  MemoryContext qcontext)
+{
 	fmgr_info_cxt(tstate->combine_meta.combinefnoid, &tstate->combine_meta.combinefn, qcontext);
 	tstate->combine_meta.combfn_fcinfo = HEAP_FCINFO(2);
 	InitFunctionCallInfoData(*tstate->combine_meta.combfn_fcinfo,
 							 &tstate->combine_meta.combinefn,
 							 2, /* combine fn always has two args */
-							 collation,
+							 tstate->combine_meta.collation,
 							 (void *) fa_aggstate,
 							 NULL);
 
@@ -332,7 +359,7 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 		InitFunctionCallInfoData(*tstate->combine_meta.deserialfn_fcinfo,
 								 &tstate->combine_meta.deserialfn,
 								 1, /* deserialize always has 1 arg */
-								 collation,
+								 tstate->combine_meta.collation,
 								 (void *) fa_aggstate,
 								 NULL);
 	}
@@ -358,15 +385,8 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 	if (OidIsValid(tstate->final_meta.finalfnoid))
 	{
 		int num_args = 1;
-		Oid *types = NULL;
-		size_t number_types = 0;
-		if (inner_agg_form->aggfinalextra)
-		{
-			types = get_input_types(input_types, &number_types);
-			num_args += number_types;
-		}
-		if (num_args != get_func_nargs(tstate->final_meta.finalfnoid))
-			elog(ERROR, "invalid number of input types");
+		int number_types = tstate->final_meta.aggfinalextra_num_args;
+		num_args += number_types;
 
 		fmgr_info_cxt(tstate->final_meta.finalfnoid, &tstate->final_meta.finalfn, qcontext);
 		/* pass the aggstate information from our current call context */
@@ -374,18 +394,19 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 		InitFunctionCallInfoData(*tstate->final_meta.finalfn_fcinfo,
 								 &tstate->final_meta.finalfn,
 								 num_args,
-								 collation,
+								 tstate->combine_meta.collation,
 								 (void *) fa_aggstate,
 								 NULL);
 		if (number_types > 0)
 		{
 			Expr *expr;
 			int i;
-			build_aggregate_finalfn_expr(types,
+			build_aggregate_finalfn_expr(tstate->final_meta.aggfinalextra_arg_types,
 										 num_args,
-										 inner_agg_form->aggtranstype,
-										 types[number_types - 1],
-										 collation,
+										 tstate->combine_meta.transtype,
+										 tstate->final_meta
+											 .aggfinalextra_arg_types[number_types - 1],
+										 tstate->combine_meta.collation,
 										 tstate->final_meta.finalfnoid,
 										 &expr);
 			fmgr_info_set_expr((Node *) expr, &tstate->final_meta.finalfn);
@@ -393,11 +414,6 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 				FC_SET_NULL(tstate->final_meta.finalfn_fcinfo, i);
 		}
 	}
-	fcinfo->flinfo->fn_extra = (void *) tstate;
-
-	MemoryContextSwitchTo(oldcontext);
-
-	return tstate;
 }
 
 /*
@@ -576,59 +592,58 @@ tsl_partialize_agg(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(OidSendFunctionCall(send_fn, arg));
 }
 
-
 /* serialization function */
 #define PQ_SENDOID pq_sendint32
 
 Datum
 tsl_finalize_agg_serialize_func(PG_FUNCTION_ARGS)
 {
-    bytea *result;
-    FATransitionState *tstate = PG_ARGISNULL(0) ? NULL : (FATransitionState *) PG_GETARG_POINTER(0);
-    MemoryContext fa_context;
-    if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
-    {
-        /* cannot be called directly because of internal-type argument */
-        elog(ERROR, "finalize_agg_serialize_func called in non-aggregate context");
-    }
-	//old_context = MemoryContextSwitchTo(fa_context);
-    // the inner agg's state is saved using inner's aggs transtype
-    // so now we have to serailize it using that type's sendfn
-    bytea *transtate_data;
-    if (tstate->per_query_state->combine_meta.transtype == BYTEAOID)
-        // write out the bytea
-        transtate_data = DatumGetByteaPP(tstate->per_group_state->trans_value);
-    else
-    {
-        Oid send_fn;
+	bytea *result;
+	FATransitionState *tstate = PG_ARGISNULL(0) ? NULL : (FATransitionState *) PG_GETARG_POINTER(0);
+	MemoryContext fa_context;
+	if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
+	{
+		/* cannot be called directly because of internal-type argument */
+		elog(ERROR, "finalize_agg_serialize_func called in non-aggregate context");
+	}
+	// old_context = MemoryContextSwitchTo(fa_context);
+	// the inner agg's state is saved using inner's aggs transtype
+	// so now we have to serailize it using that type's sendfn
+	bytea *transtate_data;
+	if (tstate->per_query_state->combine_meta.transtype == BYTEAOID)
+		// write out the bytea
+		transtate_data = DatumGetByteaPP(tstate->per_group_state->trans_value);
+	else
+	{
+		Oid send_fn;
 
-        getTypeBinaryInputInfo(tstate->per_query_state->combine_meta.transtype,
-                               &send_fn,
-                               &tstate->per_query_state->combine_meta.typIOParam);
-        transtate_data =
-            DatumGetByteaPP(OidSendFunctionCall(send_fn, tstate->per_group_state->trans_value));
-    }
+		getTypeBinaryInputInfo(tstate->per_query_state->combine_meta.transtype,
+							   &send_fn,
+							   &tstate->per_query_state->combine_meta.typIOParam);
+		transtate_data =
+			DatumGetByteaPP(OidSendFunctionCall(send_fn, tstate->per_group_state->trans_value));
+	}
 
-   /* now start writing out serialized form */
-    StringInfoData buf;
-    pq_begintypsend(&buf);
-    // per_query_state
-    // need to save collation to CombineMeta
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.combinefnoid);
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.deserialfnoid);
-   // PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.serialfnoid); // newly added
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.transtype);
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.recv_fn);
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.typIOParam);
-    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.collation);
+	/* now start writing out serialized form */
+	StringInfoData buf;
+	pq_begintypsend(&buf);
+	// per_query_state
+	// need to save collation to CombineMeta
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.combinefnoid);
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.deserialfnoid);
+	// PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.serialfnoid); // newly added
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.transtype);
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.recv_fn);
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.typIOParam);
+	PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.collation);
 
-    // now send FinalFnMeta
-    PQ_SENDOID(&buf, tstate->per_query_state->final_meta.finalfnoid);
-    // group state
-    pq_sendint32(&buf, tstate->per_group_state->trans_value_isnull);
-    pq_sendint32(&buf, tstate->per_group_state->trans_value_initialized);
-    pq_sendbytes(&buf, VARDATA_ANY(transtate_data), VARSIZE_ANY_EXHDR(transtate_data));
-    result = pq_endtypsend(&buf);
-	//MemoryContextSwitchTo(old_context);
-    PG_RETURN_BYTEA_P(result);
+	// now send FinalFnMeta
+	PQ_SENDOID(&buf, tstate->per_query_state->final_meta.finalfnoid);
+	// group state
+	pq_sendint32(&buf, tstate->per_group_state->trans_value_isnull);
+	pq_sendint32(&buf, tstate->per_group_state->trans_value_initialized);
+	pq_sendbytes(&buf, VARDATA_ANY(transtate_data), VARSIZE_ANY_EXHDR(transtate_data));
+	result = pq_endtypsend(&buf);
+	// MemoryContextSwitchTo(old_context);
+	PG_RETURN_BYTEA_P(result);
 }
