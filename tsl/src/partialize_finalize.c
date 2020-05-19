@@ -14,6 +14,7 @@
 #include <catalog/namespace.h>
 #include <catalog/pg_collation.h>
 #include <parser/parse_agg.h>
+#include <libpq/pqformat.h>
 
 #include "compat.h"
 #include "partialize_finalize.h"
@@ -573,4 +574,61 @@ tsl_partialize_agg(PG_FUNCTION_ARGS)
 	getTypeBinaryOutputInfo(arg_type, &send_fn, &type_is_varlena);
 
 	PG_RETURN_BYTEA_P(OidSendFunctionCall(send_fn, arg));
+}
+
+
+/* serialization function */
+#define PQ_SENDOID pq_sendint32
+
+Datum
+tsl_finalize_agg_serialize_func(PG_FUNCTION_ARGS)
+{
+    bytea *result;
+    FATransitionState *tstate = PG_ARGISNULL(0) ? NULL : (FATransitionState *) PG_GETARG_POINTER(0);
+    MemoryContext fa_context;
+    if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
+    {
+        /* cannot be called directly because of internal-type argument */
+        elog(ERROR, "finalize_agg_serialize_func called in non-aggregate context");
+    }
+	//old_context = MemoryContextSwitchTo(fa_context);
+    // the inner agg's state is saved using inner's aggs transtype
+    // so now we have to serailize it using that type's sendfn
+    bytea *transtate_data;
+    if (tstate->per_query_state->combine_meta.transtype == BYTEAOID)
+        // write out the bytea
+        transtate_data = DatumGetByteaPP(tstate->per_group_state->trans_value);
+    else
+    {
+        Oid send_fn;
+
+        getTypeBinaryInputInfo(tstate->per_query_state->combine_meta.transtype,
+                               &send_fn,
+                               &tstate->per_query_state->combine_meta.typIOParam);
+        transtate_data =
+            DatumGetByteaPP(OidSendFunctionCall(send_fn, tstate->per_group_state->trans_value));
+    }
+
+   /* now start writing out serialized form */
+    StringInfoData buf;
+    pq_begintypsend(&buf);
+    // per_query_state
+    // need to save collation to CombineMeta
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.combinefnoid);
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.deserialfnoid);
+   // PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.serialfnoid); // newly added
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.transtype);
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.recv_fn);
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.typIOParam);
+    PQ_SENDOID(&buf, tstate->per_query_state->combine_meta.collation);
+
+    // now send FinalFnMeta
+    PQ_SENDOID(&buf, tstate->per_query_state->final_meta.finalfnoid);
+    // group state
+    pq_sendint32(&buf, tstate->per_group_state->trans_value_isnull);
+    pq_sendint32(&buf, tstate->per_group_state->trans_value_initialized);
+    pq_sendbytes(&buf, VARDATA_ANY(transtate_data), VARSIZE_ANY_EXHDR(transtate_data));
+    result = pq_endtypsend(&buf);
+	//MemoryContextSwitchTo(old_context);
+    PG_RETURN_BYTEA_P(result);
 }
