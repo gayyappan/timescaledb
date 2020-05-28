@@ -647,3 +647,80 @@ tsl_finalize_agg_serialize_func(PG_FUNCTION_ARGS)
 	// MemoryContextSwitchTo(old_context);
 	PG_RETURN_BYTEA_P(result);
 }
+
+#define PQ_GETINT32(buf) pq_getmsgint(buf, 4)
+#define PQ_GETOID(buf) PQ_GETINT32(buf)
+
+Datum
+tsl_finalize_agg_deserialize_func(PG_FUNCTION_ARGS)
+{
+    Oid combinefn, deserialfn, serialfn, finalfn;
+    Oid transtype, collation, recv_fn, typIoParam;
+    MemoryContext fa_context;
+    if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
+    {
+        /* cannot be called directly because of internal-type argument */
+        elog(ERROR, "finalize_agg_serialize_func called in non-aggregate context");
+    }
+    MemoryContext qcontext = fcinfo->flinfo->fn_mcxt;
+    FAPerQueryState *qstate =
+        (FAPerQueryState *) fcinfo->flinfo->fn_extra;
+    Assert(qstate == NULL);
+    qstate = fa_perquery_state_init(fcinfo);
+    Assert(fcinfo->flinfo->fn_extra != NULL);
+    FATransitionState *tstate;
+    StringInfo buf = (StringInfo) PG_GETARG_POINTER(0);
+
+#define PQ_GETINT32(buf) pq_getmsgint(buf, 4)
+#define PQ_GETOID(buf) PQ_GETINT32(buf)
+
+/* create transition state from serialized */
+Datum
+tsl_finalize_agg_deserialize_func(PG_FUNCTION_ARGS)
+{
+    FATransitionState *tstate;
+    MemoryContext fa_context;
+    FAPerQueryState *tstate;
+    StringInfo buf ;
+    if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
+    {
+        /* cannot be called directly because of internal-type argument */
+        elog(ERROR, "finalize_agg_serialize_func called in non-aggregate context");
+    }
+	old_context = MemoryContextSwitchTo(fa_context);
+
+	query_state = (FAPerQueryState *) MemoryContextAlloc(qcontext, sizeof(FAPerQueryState));
+	tstate = fa_transition_state_init(&fa_context, query_state, (AggState *) fcinfo->context);
+    buf = (StringInfo) PG_GETARG_POINTER(0);
+    /* now fill in query_state from serialized form */
+   tstate->per_query_state->combine_meta.combinefnoid = PQ_GETOID(&buf);
+   tstate->per_query_state->combine_meta.deserialfnoid = PQ_GETOID(&buf);
+   tstate->per_query_state->combine_meta.transtype = PQ_GETOID(&buf);
+   tstate->per_query_state->combine_meta.recv_fn = PQ_GETOID(&buf);
+   tstate->per_query_state->combine_meta.typIOParam = PQ_GETOID(&buf);
+   tstate->per_query_state->combine_meta.collation = PQ_GETOID(&buf);
+
+    // now fill in final_meta for per_query_state
+   tstate->per_query_state->final_meta.finalfnoid = PQ_GETOID(&buf);
+
+   //now fill in group state
+   tstate->per_group_state->trans_value_isnull = PQ_GETINT32( &buf);
+   tstate->per_group_state->trans_value_initialized = PQ_GETINT32(&buf);
+/*    combinefn = PQ_GETOID(&buf);
+    deserialfn = PQ_GETOID(&buf);
+    serialfn = PQ_GETOID(&buf);
+    transtype = PQ_GETOID(&buf);
+    recv_fn = PQ_GETOID(&buf);
+    typIOParam = PQ_GETOID(&buf);
+*/
+    /* initilaize per_query stat's executor state */
+
+/*		tstate->per_group_state->trans_value =
+			inner_agg_deserialize(&tstate->per_query_state->combine_meta,
+								  inner_agg_serialized_state,
+								  inner_agg_serialized_state_isnull,
+								  &tstate->per_group_state->trans_value_isnull);
+		tstate->per_group_state->trans_value_initialized =
+			!(tstate->per_group_state->trans_value_isnull);
+*/
+}
