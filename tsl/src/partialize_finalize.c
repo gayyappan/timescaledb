@@ -98,25 +98,23 @@ typedef struct FAFinalFnMeta
  * first non-null value, initialize trans_value and set trans_value_initialized true. see PG11
  * advance_transition_function
  */
+// struct FAPerQueryState;
+typedef struct FAPerQueryState FAPerQueryState;
 typedef struct FAPerGroupState
 {
+	FAPerQueryState *qry_state;
 	Datum trans_value;
 	bool trans_value_isnull;
 	bool trans_value_initialized;
 } FAPerGroupState;
 
 /* metadata information that is common for the entire query */
-typedef struct FAPerQueryState
+struct FAPerQueryState
 {
 	FACombineFnMeta combine_meta;
 	FAFinalFnMeta final_meta;
-} FAPerQueryState;
-
-typedef struct FATransitionState
-{
-	FAPerQueryState *per_query_state;
-	FAPerGroupState *per_group_state;
-} FATransitionState;
+	FAPerGroupState *trans_state;
+};
 
 static Oid
 aggfnoid_from_aggname(text *aggfn)
@@ -256,18 +254,20 @@ get_input_types(ArrayType *input_types, size_t *number_types)
 	return type_oids;
 };
 
-static FATransitionState *
+static FAPerGroupState *
 fa_transition_state_init(MemoryContext *fa_context, FAPerQueryState *qstate, AggState *fa_aggstate)
 {
-	FATransitionState *tstate = NULL;
-	tstate = (FATransitionState *) MemoryContextAlloc(*fa_context, sizeof(*tstate));
-	tstate->per_query_state = qstate;
-	tstate->per_group_state =
-		(FAPerGroupState *) MemoryContextAlloc(*fa_context, sizeof(*tstate->per_group_state));
+	FAPerGroupState *tstate = NULL;
+	if (qstate->trans_state == NULL)
+	{
+		qstate->trans_state = (FAPerGroupState *) MemoryContextAlloc(*fa_context, sizeof(*tstate));
+		qstate->trans_state->qry_state = qstate; /* set up pointer both ways */
+	}
+	tstate = qstate->trans_state;
 
-	/* Need to init tstate->per_group_state->trans_value */
-	tstate->per_group_state->trans_value_isnull = true;
-	tstate->per_group_state->trans_value_initialized = false;
+	/* Need to init tstate->trans_value */
+	tstate->trans_value_isnull = true;
+	tstate->trans_value_initialized = false;
 	return tstate;
 }
 
@@ -298,7 +298,7 @@ fa_perquery_state_init(FunctionCallInfo fcinfo)
 		elog(ERROR,
 			 "function calls with direct args are not supported by TimescaleDB finalize agg");
 	tstate = (FAPerQueryState *) MemoryContextAlloc(qcontext, sizeof(FAPerQueryState));
-
+	tstate->trans_state = NULL;
 	tstate->final_meta.finalfnoid = inner_agg_form->aggfinalfn;
 	tstate->combine_meta.combinefnoid = inner_agg_form->aggcombinefn;
 	tstate->combine_meta.deserialfnoid = inner_agg_form->aggdeserialfn;
@@ -433,11 +433,12 @@ group_state_advance(FAPerGroupState *per_group_state, FACombineFnMeta *combine_m
 Datum
 tsl_finalize_agg_sfunc(PG_FUNCTION_ARGS)
 {
-	FATransitionState *tstate = PG_ARGISNULL(0) ? NULL : (FATransitionState *) PG_GETARG_POINTER(0);
+	FAPerGroupState *tstate = PG_ARGISNULL(0) ? NULL : (FAPerGroupState *) PG_GETARG_POINTER(0);
 	bytea *inner_agg_serialized_state = PG_ARGISNULL(5) ? NULL : PG_GETARG_BYTEA_P(5);
 	bool inner_agg_serialized_state_isnull = PG_ARGISNULL(5) ? true : false;
 	Datum inner_agg_deserialized_state;
 	MemoryContext fa_context, old_context;
+	FAPerQueryState *qry_state = (FAPerQueryState *) fcinfo->flinfo->fn_extra;
 
 	if (!AggCheckCallContext(fcinfo, &fa_context) || !IsA(fcinfo->context, AggState))
 	{
@@ -447,30 +448,31 @@ tsl_finalize_agg_sfunc(PG_FUNCTION_ARGS)
 	if (PG_ARGISNULL(1))
 		elog(ERROR, "finalize_agg_sfunc called with NULL aggfn");
 	old_context = MemoryContextSwitchTo(fa_context);
-
+	elog(LOG, "BEGININ sfunc ");
 	if (tstate == NULL)
 	{
-		FAPerQueryState *qstate = (FAPerQueryState *) fcinfo->flinfo->fn_extra;
-		if (qstate == NULL)
+		if (qry_state == NULL)
 		{
-			qstate = fa_perquery_state_init(fcinfo);
+			qry_state = fa_perquery_state_init(fcinfo);
 			Assert(fcinfo->flinfo->fn_extra != NULL);
+			elog(LOG, "QRY alloc");
+			MemoryContextStats(fa_context);
 		}
-		tstate = fa_transition_state_init(&fa_context, qstate, (AggState *) fcinfo->context);
+		elog(LOG, "TSTATE alloc");
+		MemoryContextStats(fa_context);
+		tstate = fa_transition_state_init(&fa_context, qry_state, (AggState *) fcinfo->context);
 		/* initial trans_value = the partial state of the inner agg from first invocation */
-		tstate->per_group_state->trans_value =
-			inner_agg_deserialize(&tstate->per_query_state->combine_meta,
-								  inner_agg_serialized_state,
-								  inner_agg_serialized_state_isnull,
-								  &tstate->per_group_state->trans_value_isnull);
-		tstate->per_group_state->trans_value_initialized =
-			!(tstate->per_group_state->trans_value_isnull);
+		tstate->trans_value = inner_agg_deserialize(&qry_state->combine_meta,
+													inner_agg_serialized_state,
+													inner_agg_serialized_state_isnull,
+													&tstate->trans_value_isnull);
+		tstate->trans_value_initialized = !(tstate->trans_value_isnull);
 	}
 	else
 	{
 		bool deser_isnull;
 		bool call_combine;
-		inner_agg_deserialized_state = inner_agg_deserialize(&tstate->per_query_state->combine_meta,
+		inner_agg_deserialized_state = inner_agg_deserialize(&qry_state->combine_meta,
 															 inner_agg_serialized_state,
 															 inner_agg_serialized_state_isnull,
 															 &deser_isnull);
@@ -481,25 +483,28 @@ tsl_finalize_agg_sfunc(PG_FUNCTION_ARGS)
 		 * need to try that again if so.
 		 */
 		call_combine = true;
-		if (tstate->per_query_state->combine_meta.combinefn.fn_strict)
+		Assert(qry_state != NULL);
+		if (qry_state->combine_meta.combinefn.fn_strict)
 		{
-			if (tstate->per_group_state->trans_value_initialized == false && deser_isnull == false)
+			if (tstate->trans_value_initialized == false && deser_isnull == false)
 			{
 				/* first time we got non-null value, so init the trans_value with it*/
-				tstate->per_group_state->trans_value = inner_agg_deserialized_state;
-				tstate->per_group_state->trans_value_isnull = false;
-				tstate->per_group_state->trans_value_initialized = true;
+				tstate->trans_value = inner_agg_deserialized_state;
+				tstate->trans_value_isnull = false;
+				tstate->trans_value_initialized = true;
 				call_combine = false;
 			}
-			else if (deser_isnull || tstate->per_group_state->trans_value_isnull)
+			else if (deser_isnull || tstate->trans_value_isnull)
 				call_combine = false;
 		}
 		if (call_combine)
-			group_state_advance(tstate->per_group_state,
-								&tstate->per_query_state->combine_meta,
+			group_state_advance(tstate,
+								&qry_state->combine_meta,
 								inner_agg_deserialized_state,
 								deser_isnull);
 	}
+	elog(LOG, " END sfunc ");
+	MemoryContextStats(fa_context);
 	MemoryContextSwitchTo(old_context);
 
 	PG_RETURN_POINTER(tstate);
@@ -511,8 +516,9 @@ tsl_finalize_agg_sfunc(PG_FUNCTION_ARGS)
 Datum
 tsl_finalize_agg_ffunc(PG_FUNCTION_ARGS)
 {
-	FATransitionState *tstate = PG_ARGISNULL(0) ? NULL : (FATransitionState *) PG_GETARG_POINTER(0);
+	FAPerGroupState *tstate = PG_ARGISNULL(0) ? NULL : (FAPerGroupState *) PG_GETARG_POINTER(0);
 	MemoryContext fa_context, old_context;
+	FAPerQueryState *qry_state;
 	Assert(tstate != NULL);
 	if (!AggCheckCallContext(fcinfo, &fa_context))
 	{
@@ -520,29 +526,32 @@ tsl_finalize_agg_ffunc(PG_FUNCTION_ARGS)
 		elog(ERROR, "finalize_agg_ffunc called in non-aggregate context");
 	}
 	old_context = MemoryContextSwitchTo(fa_context);
-	if (OidIsValid(tstate->per_query_state->final_meta.finalfnoid))
+	qry_state = (FAPerQueryState *) tstate->qry_state;
+	Assert(qry_state != NULL);
+	if (OidIsValid(qry_state->final_meta.finalfnoid))
 	{
 		/* don't execute if strict and the trans value is NULL or there are extra args (all extra
 		 * args are always NULL) */
-		if (!(tstate->per_query_state->final_meta.finalfn.fn_strict &&
-			  tstate->per_group_state->trans_value_isnull) &&
-			!(tstate->per_query_state->final_meta.finalfn.fn_strict &&
-			  tstate->per_query_state->final_meta.finalfn_fcinfo->nargs > 1))
+		if (!(qry_state->final_meta.finalfn.fn_strict && tstate->trans_value_isnull) &&
+			!(qry_state->final_meta.finalfn.fn_strict &&
+			  qry_state->final_meta.finalfn_fcinfo->nargs > 1))
 		{
-			FunctionCallInfo finalfn_fcinfo = tstate->per_query_state->final_meta.finalfn_fcinfo;
-			FC_ARG(finalfn_fcinfo, 0) = tstate->per_group_state->trans_value;
-			FC_NULL(finalfn_fcinfo, 0) = tstate->per_group_state->trans_value_isnull;
+			FunctionCallInfo finalfn_fcinfo = qry_state->final_meta.finalfn_fcinfo;
+			FC_ARG(finalfn_fcinfo, 0) = tstate->trans_value;
+			FC_NULL(finalfn_fcinfo, 0) = tstate->trans_value_isnull;
 			finalfn_fcinfo->isnull = false;
 
-			tstate->per_group_state->trans_value = FunctionCallInvoke(finalfn_fcinfo);
-			tstate->per_group_state->trans_value_isnull = finalfn_fcinfo->isnull;
+			tstate->trans_value = FunctionCallInvoke(finalfn_fcinfo);
+			tstate->trans_value_isnull = finalfn_fcinfo->isnull;
 		}
 	}
+	elog(LOG, " EXIT FFUNC ");
+	MemoryContextStats(fa_context);
 	MemoryContextSwitchTo(old_context);
-	if (tstate->per_group_state->trans_value_isnull)
+	if (tstate->trans_value_isnull)
 		PG_RETURN_NULL();
 	else
-		PG_RETURN_DATUM(tstate->per_group_state->trans_value);
+		PG_RETURN_DATUM(tstate->trans_value);
 }
 
 /*
