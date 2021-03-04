@@ -103,6 +103,10 @@ static const TableInfoDef catalog_table_names[_MAX_CATALOG_TABLES + 1] = {
 		.schema_name = CATALOG_SCHEMA_NAME,
 		.table_name = REMOTE_TXN_TABLE_NAME,
 	},
+	[CHUNK_INDEX_MAP] = {
+		.schema_name = CATALOG_SCHEMA_NAME,
+		.table_name = CHUNK_INDEX_MAP_TABLE_NAME,
+	},
 	[_MAX_CATALOG_TABLES] = {
 		.schema_name = "invalid schema",
 		.table_name = "invalid table",

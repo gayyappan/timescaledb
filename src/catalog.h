@@ -53,6 +53,7 @@ typedef enum CatalogTable
 	HYPERTABLE_COMPRESSION,
 	COMPRESSION_CHUNK_SIZE,
 	REMOTE_TXN,
+	CHUNK_INDEX_MAP,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -1125,11 +1126,6 @@ typedef enum Anum_compression_chunk_size_pkey
 
 #define Natts_compression_chunk_size_pkey (_Anum_compression_chunk_size_pkey_max - 1)
 
-/*
- * The maximum number of indexes a catalog table can have.
- * This needs to be bumped in case of new catalog tables that have more indexes.
- */
-#define _MAX_TABLE_INDEXES 5
 /************************************
  *
  * Remote txn table of 2pc commits
@@ -1174,6 +1170,44 @@ enum Anum_remote_data_node_name_idx
 	_Anum_remote_txn_data_node_name_idx_max,
 };
 
+/************ chunk index map  HACK *******************/
+#define CHUNK_INDEX_MAP_TABLE_NAME "chunk_index_map"
+typedef enum Anum_chunk_index_map
+{
+	Anum_chunk_index_map_orig_chunk_index = 1,
+	Anum_chunk_index_map_compress_chunk_index,
+	_Anum_chunk_index_map_max,
+} Anum_chunk_index_map;
+
+#define Natts_chunk_index_map (_Anum_chunk_index_map_max - 1)
+
+typedef struct FormData_chunk_index_map
+{
+	NameData orig_chunk_index;
+	NameData compress_chunk_index;
+} FormData_chunk_index_map;
+
+typedef FormData_chunk_index_map *Form_chunk_index_map;
+
+enum
+{
+	CHUNK_INDEX_MAP_PKEY = 0,
+	_MAX_CHUNK_INDEX_MAP_INDEX,
+};
+
+typedef enum Anum_chunk_index_map_pkey
+{
+	Anum_chunk_index_map_pkey_compress_chunk_index = 1,
+	_Anum_chunk_index_map_pkey_max,
+} Anum_chunk_index_map_pkey;
+
+#define Natts_chunk_index_map_pkey (_Anum_chunk_index_map_pkey_max - 1)
+
+/*
+ * The maximum number of indexes a catalog table can have.
+ * This needs to be bumped in case of new catalog tables that have more indexes.
+ */
+#define _MAX_TABLE_INDEXES 5
 typedef enum CacheType
 {
 	CACHE_TYPE_HYPERTABLE,

@@ -364,6 +364,17 @@ CREATE INDEX IF NOT EXISTS remote_txn_data_node_name_idx ON _timescaledb_catalog
 
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.remote_txn', '');
 
+/* temporaray HACK table */
+CREATE TABLE _timescaledb_catalog.chunk_index_map
+(
+   orig_chunk_index NAME ,
+   compress_chunk_index NAME PRIMARY KEY
+);
+   
+
+
+/* end HACK */
+
 -- Set table permissions
 -- We need to grant SELECT to PUBLIC for all tables even those not
 -- marked as being dumped because pg_dump will try to access all
