@@ -9,5 +9,6 @@ set(SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/gorilla.c
   ${CMAKE_CURRENT_SOURCE_DIR}/segment_meta.c
   ${CMAKE_CURRENT_SOURCE_DIR}/compress_index_map.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_build.c
 )
 target_sources(${TSL_LIBRARY_NAME} PRIVATE ${SOURCES})
