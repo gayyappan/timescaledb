@@ -45,6 +45,7 @@
 #include "compression_chunk_size.h"
 #include "create.h"
 #include "custom_type_cache.h"
+#include "hypertable_cache.h"
 #include "hypertable_compression.h"
 #include "segment_meta.h"
 
@@ -1599,7 +1600,8 @@ static TupleTableSlot *
 compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 {
 	Datum *invalues, *out_values;
-	bool *inisnull, *out_isnull;
+	bool *out_isnull;
+	//bool *inisnull, *out_isnull;
 	TupleTableSlot *out_slot = cr->out_slot;
 	RowCompressor *row_compressor = &cr->row_compressor;
 
@@ -1609,7 +1611,7 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 	ExecClearTuple(out_slot);
 
 	invalues = in_slot->tts_values;
-	inisnull = in_slot->tts_isnull;
+	//inisnull = in_slot->tts_isnull;
 	out_values = out_slot->tts_values;
 	out_isnull = out_slot->tts_isnull;
 
@@ -1621,6 +1623,7 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 	 */
 	for (int col = 0; col < row_compressor->n_input_columns; col++)
 	{
+		PerColumn *column = &row_compressor->per_column[col];
 		Compressor *compressor = row_compressor->per_column[col].compressor;
 		int in_attrno = col;
 
@@ -1636,46 +1639,37 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 			 out_attr->attnum,
 			 NameStr(out_attr->attname));
 
-		/* if there is no compressor, this must be a segmenter */
-		if (compressor == NULL)
-		{
-			row_compressor->compressed_is_null[out_attrno] = inisnull[in_attrno];
-			if (inisnull[in_attrno] == false)
-			{
-				SegmentInfo *segment_info = row_compressor->per_column[col].segment_info;
-				out_values[out_attrno] =
-					datumCopy(invalues[in_attrno], segment_info->typ_by_val, segment_info->typlen);
-			}
-		}
-		else
+		if (compressor != NULL)
 		{
 			void *compressed_data;
-			PerColumn *column = &row_compressor->per_column[col];
-			if (inisnull[in_attrno])
+			compressed_data = compressor->finish(compressor);
+			out_isnull[out_attrno] = ( compressed_data == NULL);
+			if ( compressed_data )
+               out_values[out_attrno] = PointerGetDatum(compressed_data);
+			if (column->min_max_metadata_builder != NULL)
 			{
-				out_isnull[out_attrno] = true;
-				out_values[out_attrno] = 0;
-				if (column->min_max_metadata_builder != NULL)
-				{
-					out_isnull[column->min_metadata_attr_offset] = true;
-					out_isnull[column->max_metadata_attr_offset] = true;
-				}
-			}
-			else
-			{
-				compressor->append_val(compressor, invalues[in_attrno]);
-				compressed_data = compressor->finish(compressor);
-				out_isnull[out_attrno] = false;
-				out_values[out_attrno] = PointerGetDatum(compressed_data);
-
-				if (row_compressor->per_column[col].min_max_metadata_builder != NULL)
-				{
+// should this be copied directly from inslot???
 					out_isnull[column->min_metadata_attr_offset] = false;
 					out_isnull[column->max_metadata_attr_offset] = false;
 					out_values[column->min_metadata_attr_offset] = invalues[in_attrno];
 					out_values[column->max_metadata_attr_offset] = invalues[in_attrno];
-				}
-			}
+	    	}
+            else
+            {
+					out_isnull[column->min_metadata_attr_offset] = true;
+					out_isnull[column->max_metadata_attr_offset] = true;
+             }
+		}
+		/* if there is no compressor, this must be a segmenter */
+		else if ( column->segment_info != NULL)
+		{
+				out_isnull[out_attrno] = column->segment_info->is_null;
+                if ( column->segment_info->is_null )
+                   out_values[out_attrno] = 0;
+                else
+			    	out_values[out_attrno] =
+					datumCopy(invalues[in_attrno], column->segment_info->typ_by_val,column-> segment_info->typlen);
+
 		}
 	}
 
@@ -1728,6 +1722,13 @@ enum IndexDecompressorState
 	INDEX_DECOMPRESSOR_DONE = 3
 };
 
+//TODO we need to maintain a map between compressed rel column ->uncompressed column
+// as the index only has a subset of columns.
+//The precompressed column assumes that it is a 1-1 mapping, but
+// this is not the case when we are building from a heap tuple (ambuild case)
+// versus inserting an index tuple (aminsert case)
+//weprobably need 2 variants here based on is the input a heap tuple or index tuple
+// TODO !!!!!!!!!!!!!!!
 typedef struct IndexDecompressor
 {
 	TupleDesc index_desc;
@@ -1736,6 +1737,7 @@ typedef struct IndexDecompressor
 	PerCompressedColumn *per_compressed_cols;
 	Datum *decompressed_datums;
 	bool *decompressed_is_nulls;
+    bool is_done; //finished returning all values for the current compressed row
 	enum IndexDecompressorState tuple_state;
 } IndexDecompressor;
 
@@ -1755,6 +1757,7 @@ index_decompressor_get_out_desc(IndexDecompressor *index_decompressor)
 	{
 		AttrNumber src_no = AttrOffsetGetAttrNumber(
 			index_decompressor->per_compressed_cols[i].decompressed_column_offset);
+        /* everything except constraints and defaults are copied */
 		TupleDescCopyEntry(out_desc,
 						   i + 1, /*attr number so offsets start at 1*/
 						   out_chunk_rel_desc,
@@ -1769,6 +1772,24 @@ index_decompressor_create(Relation index_rel, Relation compressed_rel)
 	Relation out_chunk_rel;
 	TupleDesc index_desc = RelationGetDescr(index_rel);
 	Oid compress_relid = RelationGetRelid(compressed_rel);
+	Cache *hcache = ts_hypertable_cache_pin();
+	Hypertable *ht;
+	if ((ht = ts_hypertable_cache_get_entry(hcache, compress_relid, CACHE_FLAG_MISSING_OK)) != NULL)
+	{
+		// TODO clean this up
+		// this is the root of the compression hypertable
+		if (!TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht))
+		{
+			ts_cache_release(hcache);
+			elog(ERROR,
+				 "index_decompressor_create called on chunk/table that is not from internal "
+				 "compression table");
+		}
+		ts_cache_release(hcache);
+		return NULL; // no data in root. do not need a decompressor here
+	}
+	ts_cache_release(hcache);
+
 	Chunk *compress_chunk = ts_chunk_get_by_relid(compress_relid, true /* fail_if_not_found */);
 
 	/* find corresponding chunk from orig hypertable . TODO optimize getting relation for the orig
@@ -1795,7 +1816,7 @@ index_decompressor_create(Relation index_rel, Relation compressed_rel)
 	index_decompressor->decompressed_datums = palloc(sizeof(Datum) * index_desc->natts),
 	index_decompressor->decompressed_is_nulls = palloc(sizeof(bool) * index_desc->natts),
 	index_decompressor->tuple_state = INDEX_DECOMPRESSOR_NONE;
-
+    index_decompressor->is_done = true;
 	return index_decompressor;
 }
 
@@ -1804,8 +1825,8 @@ bool
 index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values, bool *isnull,
 							Datum **out_val, bool **out_bool)
 {
-	bool is_done = false;
-	if (index_decompressor->tuple_state != INDEX_DECOMPRESSOR_IN_PROGRESS)
+	bool is_done = true;
+	if (index_decompressor->tuple_state == INDEX_DECOMPRESSOR_NONE)
 	{
 		populate_per_compressed_columns_from_data(index_decompressor->per_compressed_cols,
 												  index_decompressor->num_index_cols,
@@ -1813,11 +1834,12 @@ index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values
 												  isnull);
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_IN_PROGRESS;
 	}
-	else if (index_decompressor->tuple_state != INDEX_DECOMPRESSOR_DONE)
+	else if (index_decompressor->tuple_state == INDEX_DECOMPRESSOR_DONE)
 	{
 		// reset state
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_NONE;
-		return true;
+        index_decompressor->is_done = true;
+		return false;
 	}
 	/* we're done if all the decompressors return NULL */
 	for (int16 col = 0; col < index_decompressor->num_index_cols; col++)
@@ -1828,13 +1850,18 @@ index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values
 										index_decompressor->decompressed_is_nulls);
 		is_done &= col_is_done;
 	}
-	out_val = &index_decompressor->decompressed_datums;
-	out_bool = &index_decompressor->decompressed_is_nulls;
 	if (is_done)
 	{
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_DONE;
+		return false;
 	}
+    else
+    {
+    //we are returning only 1 row here. need to call this function to get more rows.
+	*out_val = index_decompressor->decompressed_datums;
+	*out_bool = index_decompressor->decompressed_is_nulls;
 	return true;
+    }
 }
 
 void
@@ -1846,6 +1873,11 @@ index_decompressor_destroy(IndexDecompressor *index_decompressor)
 	UnlockRelationId(&out_relid, AccessShareLock);
 }
 
+/* we are going create a index tuple based on the compressed_rel tuple
+ * get the mapping from compressed_rel -> out_rel.
+ * index tuple has fewer attrs than out_rel. map only the attrs needed to
+ * create the index tuple
+ */
 static PerCompressedColumn *
 create_per_compressed_column_for_index(Relation index_rel, Relation compressed_rel,
 									   Relation out_rel, Oid compressed_data_type_oid)
@@ -1904,4 +1936,50 @@ create_per_compressed_column_for_index(Relation index_rel, Relation compressed_r
 	}
 
 	return per_compressed_cols;
+}
+
+/********************/
+/*** temporray SQL Bindings ***/
+/********************/
+
+Datum
+timestamp_compressed_data_decompress_forward(PG_FUNCTION_ARGS)
+{
+	Datum compressed;
+	CompressedDataHeader *header;
+	DecompressionIterator *iter;
+	DecompressResult res;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	compressed = PG_GETARG_DATUM(0);
+	header = (CompressedDataHeader *) PG_DETOAST_DATUM(compressed);
+
+	ArrayBuildState *array_builder =
+		NULL; //= initArrayResult(TIMESTAMPTZOID, CurrentMemoryContext, false);
+	iter = definitions[header->compression_algorithm]
+			   .iterator_init_forward(PG_GETARG_DATUM(0), get_fn_expr_argtype(fcinfo->flinfo, 1));
+
+	res = iter->try_next(iter);
+
+	while (res.is_done == false)
+	{
+		if (res.is_null)
+			array_builder = accumArrayResult(array_builder,
+											 res.val,
+											 true,
+											 TIMESTAMPTZOID,
+											 CurrentMemoryContext);
+		else
+			array_builder = accumArrayResult(array_builder,
+											 res.val,
+											 false,
+											 TIMESTAMPTZOID,
+											 CurrentMemoryContext);
+		res = iter->try_next(iter);
+	}
+	Datum result = makeArrayResult(array_builder, CurrentMemoryContext);
+
+	return result;
 }

@@ -39,7 +39,7 @@ SELECT * FROM test1 WHERE b = 11 order by i, timec ;
 explain verbose
 SELECT * FROM test1 WHERE i = 11;
 -- TODO fix this
---SELECT * FROM test1 WHERE i = 11;
+SELECT * FROM test1 WHERE i = 11;
 
 
 --- TESTS for tables with defaults ---

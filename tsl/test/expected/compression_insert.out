@@ -142,7 +142,13 @@ SELECT * FROM test1 WHERE i = 11;
 (5 rows)
 
 -- TODO fix this
---SELECT * FROM test1 WHERE i = 11;
+SELECT * FROM test1 WHERE i = 11;
+            timec             | i  | b  |  t  
+------------------------------+----+----+-----
+ Thu Jan 02 08:16:00 2020 PST | 11 | 16 | new
+ Thu Jan 02 08:16:00 2020 PST | 11 | 16 | NEW
+(2 rows)
+
 --- TESTS for tables with defaults ---
 --check sequences , generated etc. ....
 --cannot check unique constraints yet

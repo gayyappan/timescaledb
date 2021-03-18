@@ -122,6 +122,7 @@ extern Datum tsl_compressed_data_recv(PG_FUNCTION_ARGS);
 extern Datum tsl_compressed_data_in(PG_FUNCTION_ARGS);
 extern Datum tsl_compressed_data_out(PG_FUNCTION_ARGS);
 
+extern Datum timestamp_compressed_data_decompress_forward(PG_FUNCTION_ARGS);
 static void
 pg_attribute_unused() assert_num_compression_algorithms_sane(void)
 {
