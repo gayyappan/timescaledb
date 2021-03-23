@@ -29,9 +29,9 @@
 #include <utils/sortsupport.h>
 #include <utils/tuplesort.h>
 
-#include "compress_index_map.h"
-#include "compress_uk_build.h"
-#include "compression.h"
+#include "compression/compress_index_map.h"
+#include "compression/compress_uk/compress_uk_build.h"
+#include "compression/compression.h"
 
 
 /* Magic numbers for parallel state sharing */
