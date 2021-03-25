@@ -15,7 +15,6 @@
 
 #include "catalog.h"
 
-IndexBuildResult *
-compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo);
+extern IndexBuildResult *compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo);
 
 #endif /* TIMESCALEDB_TSL_COMPRESS_UK_BUILD_H */

@@ -24,6 +24,7 @@
 #include "compression/compression.h"
 #include "compress_uk.h"
 #include "compress_uk_build.h"
+#include "compress_uk_insert.h"
 
 Datum
 tsl_compress_uk_handler(PG_FUNCTION_ARGS)
@@ -59,8 +60,8 @@ tsl_compress_uk_handler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = compress_uk_bulkdelete;
 	amroutine->amvacuumcleanup = compress_uk_vacuumcleanup;
 	/* index scan specific functions : TODO */
-	amroutine->amcanreturn = NULL; /* no index scan support */
-	amroutine->amcostestimate = compress_uk_costestimate; //needed by get_relation_info
+	amroutine->amcanreturn = NULL;						  /* no index scan support */
+	amroutine->amcostestimate = compress_uk_costestimate; // needed by get_relation_info
 
 	amroutine->amoptions =
 		btoptions; // TODO. we have no option. ButDEfineIndex expects a non null value eheres
@@ -167,7 +168,11 @@ compress_uk_insert(Relation index_rel, Datum *values, bool *isnull, ItemPointer 
 		itup = index_form_tuple(ukstate->index_tuple_desc, values, isnull);
 		itup->t_tid = *ht_ctid;
 
-		result = _bt_doinsert(index_rel, itup, checkUnique, heap_rel);
+		result = ts_compress_uk_doinsert(index_rel,
+										 ukstate->index_tuple_desc,
+										 itup,
+										 checkUnique,
+										 heap_rel);
 		pfree(itup);
 	}
 	/* return val is useful only for UNIQUE_CHECK_PARTIAL. Not supported at the moment.
@@ -413,18 +418,17 @@ compress_uk_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	return NULL;
 }
 
-//see if we can reuse btcostestimate
-//give soem absurd value for now
+// see if we can reuse btcostestimate
+// give soem absurd value for now
 void
 compress_uk_costestimate(PlannerInfo *root, IndexPath *path, double loop_count,
-               Cost *indexStartupCost, Cost *indexTotalCost,
-               Selectivity *indexSelectivity, double *indexCorrelation,
-               double *indexPages)
+						 Cost *indexStartupCost, Cost *indexTotalCost,
+						 Selectivity *indexSelectivity, double *indexCorrelation,
+						 double *indexPages)
 {
-    *indexStartupCost =100000;
-    *indexTotalCost = 1000000.0;
-    *indexSelectivity = 0;
-    *indexCorrelation = 0.0;
-    *indexPages = 800;
-
+	*indexStartupCost = 100000;
+	*indexTotalCost = 1000000.0;
+	*indexSelectivity = 0;
+	*indexCorrelation = 0.0;
+	*indexPages = 800;
 }

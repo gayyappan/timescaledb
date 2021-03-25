@@ -22,6 +22,8 @@
 #include "compression/dictionary.h"
 #include "compression/gorilla.h"
 #include "compression/segment_meta.h"
+#include "compression/compress_uk/compress_uk.h"
+#include "compression/compress_uk/compress_uk_fns.h"
 #include "continuous_aggs/create.h"
 #include "continuous_aggs/insert.h"
 #include "continuous_aggs/options.h"
@@ -128,6 +130,7 @@ CrossModuleFunctions tsl_cm_functions = {
 	.continuous_agg_refresh_chunk = continuous_agg_refresh_chunk,
 	.continuous_agg_invalidate = invalidation_add_entry,
 	.compressed_data_decompress_forward = tsl_compressed_data_decompress_forward,
+	.timestamp_compressed_data_decompress_forward = timestamp_compressed_data_decompress_forward,
 	.compressed_data_decompress_reverse = tsl_compressed_data_decompress_reverse,
 	.compressed_data_send = tsl_compressed_data_send,
 	.compressed_data_recv = tsl_compressed_data_recv,
@@ -150,6 +153,9 @@ CrossModuleFunctions tsl_cm_functions = {
 	.compress_row_exec = compress_row_exec,
 	.compress_row_end = compress_row_end,
 	.compress_row_destroy = compress_row_destroy,
+	.compress_uk_handler = tsl_compress_uk_handler,
+	.compress_uk_equal = tsl_compress_uk_equal,
+	.compress_uk_cmp = tsl_compress_uk_cmp,
 	.data_node_add = data_node_add,
 	.data_node_delete = data_node_delete,
 	.data_node_attach = data_node_attach,

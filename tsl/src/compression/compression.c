@@ -1601,7 +1601,7 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 {
 	Datum *invalues, *out_values;
 	bool *out_isnull;
-	//bool *inisnull, *out_isnull;
+	// bool *inisnull, *out_isnull;
 	TupleTableSlot *out_slot = cr->out_slot;
 	RowCompressor *row_compressor = &cr->row_compressor;
 
@@ -1611,7 +1611,7 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 	ExecClearTuple(out_slot);
 
 	invalues = in_slot->tts_values;
-	//inisnull = in_slot->tts_isnull;
+	// inisnull = in_slot->tts_isnull;
 	out_values = out_slot->tts_values;
 	out_isnull = out_slot->tts_isnull;
 
@@ -1643,33 +1643,33 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 		{
 			void *compressed_data;
 			compressed_data = compressor->finish(compressor);
-			out_isnull[out_attrno] = ( compressed_data == NULL);
-			if ( compressed_data )
-               out_values[out_attrno] = PointerGetDatum(compressed_data);
+			out_isnull[out_attrno] = (compressed_data == NULL);
+			if (compressed_data)
+				out_values[out_attrno] = PointerGetDatum(compressed_data);
 			if (column->min_max_metadata_builder != NULL)
 			{
-// should this be copied directly from inslot???
-					out_isnull[column->min_metadata_attr_offset] = false;
-					out_isnull[column->max_metadata_attr_offset] = false;
-					out_values[column->min_metadata_attr_offset] = invalues[in_attrno];
-					out_values[column->max_metadata_attr_offset] = invalues[in_attrno];
-	    	}
-            else
-            {
-					out_isnull[column->min_metadata_attr_offset] = true;
-					out_isnull[column->max_metadata_attr_offset] = true;
-             }
+				// should this be copied directly from inslot???
+				out_isnull[column->min_metadata_attr_offset] = false;
+				out_isnull[column->max_metadata_attr_offset] = false;
+				out_values[column->min_metadata_attr_offset] = invalues[in_attrno];
+				out_values[column->max_metadata_attr_offset] = invalues[in_attrno];
+			}
+			else
+			{
+				out_isnull[column->min_metadata_attr_offset] = true;
+				out_isnull[column->max_metadata_attr_offset] = true;
+			}
 		}
 		/* if there is no compressor, this must be a segmenter */
-		else if ( column->segment_info != NULL)
+		else if (column->segment_info != NULL)
 		{
-				out_isnull[out_attrno] = column->segment_info->is_null;
-                if ( column->segment_info->is_null )
-                   out_values[out_attrno] = 0;
-                else
-			    	out_values[out_attrno] =
-					datumCopy(invalues[in_attrno], column->segment_info->typ_by_val,column-> segment_info->typlen);
-
+			out_isnull[out_attrno] = column->segment_info->is_null;
+			if (column->segment_info->is_null)
+				out_values[out_attrno] = 0;
+			else
+				out_values[out_attrno] = datumCopy(invalues[in_attrno],
+												   column->segment_info->typ_by_val,
+												   column->segment_info->typlen);
 		}
 	}
 
@@ -1722,12 +1722,12 @@ enum IndexDecompressorState
 	INDEX_DECOMPRESSOR_DONE = 3
 };
 
-//TODO we need to maintain a map between compressed rel column ->uncompressed column
+// TODO we need to maintain a map between compressed rel column ->uncompressed column
 // as the index only has a subset of columns.
-//The precompressed column assumes that it is a 1-1 mapping, but
+// The precompressed column assumes that it is a 1-1 mapping, but
 // this is not the case when we are building from a heap tuple (ambuild case)
 // versus inserting an index tuple (aminsert case)
-//weprobably need 2 variants here based on is the input a heap tuple or index tuple
+// weprobably need 2 variants here based on is the input a heap tuple or index tuple
 // TODO !!!!!!!!!!!!!!!
 typedef struct IndexDecompressor
 {
@@ -1737,7 +1737,7 @@ typedef struct IndexDecompressor
 	PerCompressedColumn *per_compressed_cols;
 	Datum *decompressed_datums;
 	bool *decompressed_is_nulls;
-    bool is_done; //finished returning all values for the current compressed row
+	bool is_done; // finished returning all values for the current compressed row
 	enum IndexDecompressorState tuple_state;
 } IndexDecompressor;
 
@@ -1757,7 +1757,7 @@ index_decompressor_get_out_desc(IndexDecompressor *index_decompressor)
 	{
 		AttrNumber src_no = AttrOffsetGetAttrNumber(
 			index_decompressor->per_compressed_cols[i].decompressed_column_offset);
-        /* everything except constraints and defaults are copied */
+		/* everything except constraints and defaults are copied */
 		TupleDescCopyEntry(out_desc,
 						   i + 1, /*attr number so offsets start at 1*/
 						   out_chunk_rel_desc,
@@ -1816,7 +1816,7 @@ index_decompressor_create(Relation index_rel, Relation compressed_rel)
 	index_decompressor->decompressed_datums = palloc(sizeof(Datum) * index_desc->natts),
 	index_decompressor->decompressed_is_nulls = palloc(sizeof(bool) * index_desc->natts),
 	index_decompressor->tuple_state = INDEX_DECOMPRESSOR_NONE;
-    index_decompressor->is_done = true;
+	index_decompressor->is_done = true;
 	return index_decompressor;
 }
 
@@ -1838,7 +1838,7 @@ index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values
 	{
 		// reset state
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_NONE;
-        index_decompressor->is_done = true;
+		index_decompressor->is_done = true;
 		return false;
 	}
 	/* we're done if all the decompressors return NULL */
@@ -1855,13 +1855,13 @@ index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_DONE;
 		return false;
 	}
-    else
-    {
-    //we are returning only 1 row here. need to call this function to get more rows.
-	*out_val = index_decompressor->decompressed_datums;
-	*out_bool = index_decompressor->decompressed_is_nulls;
-	return true;
-    }
+	else
+	{
+		// we are returning only 1 row here. need to call this function to get more rows.
+		*out_val = index_decompressor->decompressed_datums;
+		*out_bool = index_decompressor->decompressed_is_nulls;
+		return true;
+	}
 }
 
 void

@@ -49,6 +49,7 @@ CROSSMODULE_WRAPPER(finalize_agg_ffunc);
 
 /* compression functions */
 CROSSMODULE_WRAPPER(compressed_data_decompress_forward);
+CROSSMODULE_WRAPPER(timestamp_compressed_data_decompress_forward);
 CROSSMODULE_WRAPPER(compressed_data_decompress_reverse);
 CROSSMODULE_WRAPPER(compressed_data_send);
 CROSSMODULE_WRAPPER(compressed_data_recv);
@@ -64,6 +65,9 @@ CROSSMODULE_WRAPPER(array_compressor_append);
 CROSSMODULE_WRAPPER(array_compressor_finish);
 CROSSMODULE_WRAPPER(compress_chunk);
 CROSSMODULE_WRAPPER(decompress_chunk);
+CROSSMODULE_WRAPPER(compress_uk_handler);
+CROSSMODULE_WRAPPER(compress_uk_cmp);
+CROSSMODULE_WRAPPER(compress_uk_equal);
 
 /* continous aggregate */
 CROSSMODULE_WRAPPER(continuous_agg_invalidation_trigger);
@@ -346,6 +350,7 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.compress_chunk = error_no_default_fn_pg_community,
 	.decompress_chunk = error_no_default_fn_pg_community,
 	.compressed_data_decompress_forward = error_no_default_fn_pg_community,
+	.timestamp_compressed_data_decompress_forward = error_no_default_fn_pg_community,
 	.compressed_data_decompress_reverse = error_no_default_fn_pg_community,
 	.deltadelta_compressor_append = error_no_default_fn_pg_community,
 	.deltadelta_compressor_finish = error_no_default_fn_pg_community,
@@ -359,6 +364,9 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.compress_row_exec = NULL,
 	.compress_row_end = NULL,
 	.compress_row_destroy = NULL,
+	.compress_uk_handler = error_no_default_fn_pg_community,
+	.compress_uk_equal = error_no_default_fn_pg_community,
+	.compress_uk_cmp = error_no_default_fn_pg_community,
 
 	.data_node_add = error_no_default_fn_pg_community,
 	.data_node_delete = error_no_default_fn_pg_community,

@@ -1,6 +1,9 @@
 set(SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_build.c
   ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_utils.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_insert.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_search.c
   ${CMAKE_CURRENT_SOURCE_DIR}/compress_uk_fns.c
 )
 target_sources(${TSL_LIBRARY_NAME} PRIVATE ${SOURCES})

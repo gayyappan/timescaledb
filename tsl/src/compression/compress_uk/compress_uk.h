@@ -12,7 +12,7 @@
 
 extern Datum tsl_compress_uk_handler(PG_FUNCTION_ARGS);
 
-//TODO should these functions be internal to compress_uk.c???
+// TODO should these functions be internal to compress_uk.c???
 void compress_uk_buildempty(Relation index);
 IndexBuildResult *compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo);
 
@@ -31,9 +31,8 @@ IndexBulkDeleteResult *compress_uk_bulkdelete(IndexVacuumInfo *info, IndexBulkDe
 											  void *callback_state);
 IndexBulkDeleteResult *compress_uk_vacuumcleanup(IndexVacuumInfo *info,
 												 IndexBulkDeleteResult *stats);
-void
-compress_uk_costestimate(PlannerInfo *root, IndexPath *path, double loop_count,
-               Cost *indexStartupCost, Cost *indexTotalCost,
-               Selectivity *indexSelectivity, double *indexCorrelation,
-               double *indexPages);
+void compress_uk_costestimate(PlannerInfo *root, IndexPath *path, double loop_count,
+							  Cost *indexStartupCost, Cost *indexTotalCost,
+							  Selectivity *indexSelectivity, double *indexCorrelation,
+							  double *indexPages);
 #endif /* TIMESCALEDB_TSL_COMPRESS_UK_H */

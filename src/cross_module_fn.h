@@ -110,6 +110,7 @@ typedef struct CrossModuleFunctions
 	 *  stub is installed on the customer's machine.
 	 */
 	PGFunction compressed_data_decompress_forward;
+	PGFunction timestamp_compressed_data_decompress_forward;
 	PGFunction compressed_data_decompress_reverse;
 	PGFunction deltadelta_compressor_append;
 	PGFunction deltadelta_compressor_finish;
@@ -164,6 +165,9 @@ typedef struct CrossModuleFunctions
 	TupleTableSlot *(*compress_row_exec)(CompressSingleRowState *cr, TupleTableSlot *slot);
 	void (*compress_row_end)(CompressSingleRowState *cr);
 	void (*compress_row_destroy)(CompressSingleRowState *cr);
+	Datum (*compress_uk_handler)(PG_FUNCTION_ARGS);
+	Datum (*compress_uk_cmp)(PG_FUNCTION_ARGS);
+	Datum (*compress_uk_equal)(PG_FUNCTION_ARGS);
 
 } CrossModuleFunctions;
 
