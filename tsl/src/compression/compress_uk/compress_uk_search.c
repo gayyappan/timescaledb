@@ -699,7 +699,16 @@ ts_bt_compare(Relation rel,
 													 scankey->sk_collation,
 													 datum,
 													 scankey->sk_argument));
+			{
+				Oid typoutput;
+				bool typisvarlena;
+				int i = 0;
+				getTypeOutputInfo(TupleDescAttr(itupdesc, i)->atttypid, &typoutput, &typisvarlena);
 
+				char *val = OidOutputFunctionCall(typoutput, datum);
+				char *val2 = OidOutputFunctionCall(typoutput, scankey->sk_argument);
+				elog(NOTICE, "BTCOMP comparing %s (index) to %s res=(%d)", val, val2, result);
+			}
 			if (!(scankey->sk_flags & SK_BT_DESC))
 				INVERT_COMPARE_RESULT(result);
 		}

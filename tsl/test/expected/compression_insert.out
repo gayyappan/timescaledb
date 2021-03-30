@@ -29,60 +29,8 @@ FROM show_chunks('test1') c;
 
 -- single and multi row insert into the compressed chunk --
 INSERT INTO test1 SELECT '2020-01-02 11:16:00-05' , i, i +5, 'new' FROM (Select generate_series(11, 12, 1) i ) q;
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
 INSERT INTO test1 SELECT '2020-01-02 11:16:00-05' , i, i +5, 'NEW'
 FROM (Select generate_series(10, 20, 1) i ) q;
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
 SELECT count(*) from test1;
  count 
 -------
@@ -178,10 +126,6 @@ FROM show_chunks('test2') c;
 
 -- test if default value for b is used
 INSERT INTO test2(timec, i, t) values('2020-01-02 10:16:00-05' , 11, 'default' );
-NOTICE:  (0 0) map (1 timec) to (1 timec) 
-NOTICE:  (1 1) map (2 i) to (2 i) 
-NOTICE:  (2 2) map (3 b) to (3 b) 
-NOTICE:  (3 3) map (4 t) to (4 t) 
 SELECT b from test2 ORDER BY 1;
   b  
 -----

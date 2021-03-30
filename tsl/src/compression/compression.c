@@ -1178,8 +1178,9 @@ create_per_compressed_column(TupleDesc in_desc, TupleDesc out_desc, Oid out_reli
 }
 
 static void
-populate_per_compressed_columns_from_data(PerCompressedColumn *per_compressed_cols, int16 num_cols,
-										  Datum *compressed_datums, bool *compressed_is_nulls)
+populate_per_compressed_columns_from_data_buffer(PerCompressedColumn *per_compressed_cols,
+												 int16 num_cols, Datum *compressed_datums,
+												 bool *compressed_is_nulls, bool isbuffer)
 {
 	for (int16 col = 0; col < num_cols; col++)
 	{
@@ -1208,6 +1209,17 @@ populate_per_compressed_columns_from_data(PerCompressedColumn *per_compressed_co
 		else
 			per_col->val = compressed_datums[col];
 	}
+}
+
+static void
+populate_per_compressed_columns_from_data(PerCompressedColumn *per_compressed_cols, int16 num_cols,
+										  Datum *compressed_datums, bool *compressed_is_nulls)
+{
+	populate_per_compressed_columns_from_data_buffer(per_compressed_cols,
+													 num_cols,
+													 compressed_datums,
+													 compressed_is_nulls,
+													 false);
 }
 
 static void
@@ -1605,8 +1617,6 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 	TupleTableSlot *out_slot = cr->out_slot;
 	RowCompressor *row_compressor = &cr->row_compressor;
 
-	TupleDesc in_desc = RelationGetDescr(cr->in_rel);
-	TupleDesc out_desc = RelationGetDescr(cr->out_rel);
 	slot_getallattrs(in_slot);
 	ExecClearTuple(out_slot);
 
@@ -1626,19 +1636,21 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 		PerColumn *column = &row_compressor->per_column[col];
 		Compressor *compressor = row_compressor->per_column[col].compressor;
 		int in_attrno = col;
-
 		int16 out_attrno = row_compressor->uncompressed_col_to_compressed_col[col];
-		Form_pg_attribute in_attr = TupleDescAttr(in_desc, col);
-		Form_pg_attribute out_attr = TupleDescAttr(out_desc, out_attrno);
-		elog(NOTICE,
-			 "(%d %d) map (%d %s) to (%d %s) ",
-			 col,
-			 out_attrno,
-			 in_attr->attnum,
-			 NameStr(in_attr->attname),
-			 out_attr->attnum,
-			 NameStr(out_attr->attname));
-
+		/*
+				TupleDesc in_desc = RelationGetDescr(cr->in_rel);
+				TupleDesc out_desc = RelationGetDescr(cr->out_rel);
+				Form_pg_attribute in_attr = TupleDescAttr(in_desc, col);
+				Form_pg_attribute out_attr = TupleDescAttr(out_desc, out_attrno);
+				elog(NOTICE,
+					 "(%d %d) map (%d %s) to (%d %s) ",
+					 col,
+					 out_attrno,
+					 in_attr->attnum,
+					 NameStr(in_attr->attname),
+					 out_attr->attnum,
+					 NameStr(out_attr->attname));
+		*/
 		if (compressor != NULL)
 		{
 			void *compressed_data;
@@ -1687,7 +1699,7 @@ compress_singlerow(CompressSingleRowState *cr, TupleTableSlot *in_slot)
 	out_values[row_compressor->sequence_num_metadata_column_offset] = Int32GetDatum(0);
 	out_isnull[row_compressor->sequence_num_metadata_column_offset] = false;
 
-	row_compressor->rows_compressed_into_current_value = 1;
+	Assert(row_compressor->rows_compressed_into_current_value == 1);
 
 	ExecStoreVirtualTuple(out_slot);
 
@@ -1828,10 +1840,11 @@ index_decompressor_get_next(IndexDecompressor *index_decompressor, Datum *values
 	bool is_done = true;
 	if (index_decompressor->tuple_state == INDEX_DECOMPRESSOR_NONE)
 	{
-		populate_per_compressed_columns_from_data(index_decompressor->per_compressed_cols,
-												  index_decompressor->num_index_cols,
-												  values,
-												  isnull);
+		populate_per_compressed_columns_from_data_buffer(index_decompressor->per_compressed_cols,
+														 index_decompressor->num_index_cols,
+														 values,
+														 isnull,
+														 true);
 		index_decompressor->tuple_state = INDEX_DECOMPRESSOR_IN_PROGRESS;
 	}
 	else if (index_decompressor->tuple_state == INDEX_DECOMPRESSOR_DONE)

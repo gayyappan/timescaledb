@@ -39,11 +39,11 @@
 #include "compress_uk_build.h"
 #include "compression/compression.h"
 
-//TODO do we need any of these options. see amoptions func too
+// TODO do we need any of these options. see amoptions func too
 #define COMPRESS_UK_FILLFACTOR(relation) BTREE_DEFAULT_FILLFACTOR
-//based on BTGetTargetPageFreeSpace
-#define COMPRESS_UK_GET_TARGET_PAGE_FREE_SPACE(relation) \
-    (BLCKSZ * (100 - COMPRESS_UK_FILLFACTOR(relation)) / 100)
+// based on BTGetTargetPageFreeSpace
+#define COMPRESS_UK_GET_TARGET_PAGE_FREE_SPACE(relation)                                           \
+	(BLCKSZ * (100 - COMPRESS_UK_FILLFACTOR(relation)) / 100)
 
 /* Magic numbers for parallel state sharing */
 #define PARALLEL_KEY_BTREE_SHARED UINT64CONST(0xA000000000000001)
@@ -128,7 +128,7 @@ typedef struct BTWriteState
 {
 	Relation heap;
 	Relation index;
-    Relation uncompressed_index;  /* HACK to pass in correct tuple desc */
+	Relation uncompressed_index;	/* HACK to pass in correct tuple desc */
 	BTScanInsert inskey;			/* generic insertion scankey */
 	bool btws_use_wal;				/* dump pages to WAL? */
 	BlockNumber btws_pages_alloced; /* # pages allocated */
@@ -200,8 +200,9 @@ compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo)
 
 	/************************TEMPORARY FOR DEBUGGING !!!!!!!!!!!!!!!*****/
 	if (orig_index_oid == InvalidOid)
-		orig_index_oid = 154293;; /* for 2_2_metrics_pkey from pg_class */
-								 /*************** END OF TEMPORARY !!!!!!!!!!!!!!!!******/
+		orig_index_oid = 154300;; /* for 1_1_metrics_pkey from pg_class */
+		//orig_index_oid = 170768;  /* for 5_2_inttab_pkey from pg_class */
+	/*************** END OF TEMPORARY !!!!!!!!!!!!!!!!******/
 	buildstate.orig_chunk_index = index_open(orig_index_oid, RowExclusiveLock);
 	/*
 	 * We expect to be called exactly once for any index relation. If that's
@@ -237,6 +238,10 @@ compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	}
 #endif /* BTREE_BUILD_STATS */
 
+	index_close(buildstate.orig_chunk_index, RowExclusiveLock); // HACK need to get rid of this
+																// index
+	if (buildstate.index_decompressor)
+		index_decompressor_destroy(buildstate.index_decompressor);
 	return result;
 }
 
@@ -436,6 +441,58 @@ printatt(unsigned attributeId, Form_pg_attribute attributeP, char *value)
 	attributeP->attbyval ? 't' : 'f'); */
 }
 
+/* tupledescr for the intrenal index format. out_val and out_null contan the
+ * values for this tupledescr
+ */
+void
+ts_debug_compress_uk_tup(TupleDesc out_desc, int natts, Datum *out_val, bool *out_null)
+{
+	for (int i = 0; i < natts; i++)
+	{
+		Oid typoutput;
+		bool typisvarlena;
+		char *value;
+		getTypeOutputInfo(TupleDescAttr(out_desc, i)->atttypid, &typoutput, &typisvarlena);
+
+		if (!out_null[i])
+			value = OidOutputFunctionCall(typoutput, out_val[i]);
+		else
+			value = NULL;
+		printatt((unsigned) i + 1, TupleDescAttr(out_desc, i), value);
+	}
+}
+
+char *
+ts_compress_uk_build_indexdescr(TupleDesc out_desc, int nindatts, Datum *out_val, bool *out_null)
+{
+	StringInfoData buf;
+	initStringInfo(&buf);
+	appendStringInfo(&buf, "(");
+
+	for (int i = 0; i < nindatts; i++)
+	{
+		char *val;
+
+		if (out_null[i])
+			val = "null";
+		else
+		{
+			Oid typoutput;
+			bool typisvarlena;
+			getTypeOutputInfo(TupleDescAttr(out_desc, i)->atttypid, &typoutput, &typisvarlena);
+
+			val = OidOutputFunctionCall(typoutput, out_val[i]);
+		}
+
+		if (i > 0)
+			appendStringInfoString(&buf, ", ");
+		appendStringInfoString(&buf, val);
+	}
+
+	appendStringInfoChar(&buf, ')');
+	return buf.data;
+}
+
 static void
 _bt_spool(BTSpool *btspool, IndexDecompressor *index_decompressor, ItemPointer self, Datum *values,
 		  bool *isnull)
@@ -452,19 +509,7 @@ _bt_spool(BTSpool *btspool, IndexDecompressor *index_decompressor, ItemPointer s
 									   &out_val,
 									   &out_null))
 	{
-		{
-			Oid typoutput;
-			bool typisvarlena;
-			char *value;
-			int i = 0;
-			getTypeOutputInfo(TupleDescAttr(out_desc, i)->atttypid, &typoutput, &typisvarlena);
-
-			if (!isnull[i])
-				value = OidOutputFunctionCall(typoutput, out_val[i]);
-			else
-				value = NULL;
-			printatt((unsigned) i + 1, TupleDescAttr(out_desc, i), value);
-		}
+		ts_debug_compress_uk_tup(out_desc, 1, out_val, isnull);
 		tuplesort_putindextuplevalues(btspool->sortstate, btspool->index, self, out_val, out_null);
 	}
 }
@@ -497,10 +542,10 @@ _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2, Relation compress_index)
 
 	wstate.heap = btspool->heap;
 	wstate.index = compress_index;
-    wstate.uncompressed_index = btspool->index;
+	wstate.uncompressed_index = btspool->index;
 	wstate.inskey = _bt_mkscankey(wstate.uncompressed_index, NULL);
 	/* _bt_mkscankey() won't set allequalimage without metapage */
-    //TODO what is allequalimage used for ??????????
+	// TODO what is allequalimage used for ??????????
 	wstate.inskey->allequalimage = _bt_allequalimage(wstate.index, true);
 	wstate.btws_use_wal = RelationNeedsWAL(wstate.index);
 
@@ -1109,8 +1154,8 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	bool load1;
 	TupleDesc tupdes = RelationGetDescr(wstate->uncompressed_index);
 	int i, keysz = IndexRelationGetNumberOfKeyAttributes(wstate->index);
-Assert( IndexRelationGetNumberOfKeyAttributes(wstate->index) ==
-        IndexRelationGetNumberOfKeyAttributes(wstate->uncompressed_index) );
+	Assert(IndexRelationGetNumberOfKeyAttributes(wstate->index) ==
+		   IndexRelationGetNumberOfKeyAttributes(wstate->uncompressed_index));
 	SortSupport sortKeys;
 	int64 tuples_done = 0;
 	bool deduplicate;

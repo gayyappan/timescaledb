@@ -18,6 +18,7 @@
 #include "compression/compress_uk/compress_uk_insert.h"
 #include "compression/compress_uk/compress_uk_search.h"
 #include "compression/compress_uk/compress_uk_utils.h"
+#include "compression/compress_uk/compress_uk_build.h"
 
 /* copied from nbtinsert.c and modified as needed */
 /* Minimum tree height for application of fastpath optimization */
@@ -351,7 +352,7 @@ ts_bt_search_insert(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertsta
 	}
 
 	/* Cannot use optimization -- descend tree, return proper descent stack */
-	return _bt_search(rel, insertstate->itup_key, &insertstate->buf, BT_WRITE, NULL);
+	return ts_bt_search(rel, rel_tupdesc, insertstate->itup_key, &insertstate->buf, BT_WRITE, NULL);
 }
 
 /*
@@ -412,7 +413,7 @@ ts_bt_check_unique(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertstat
 	 * in the fastpath below, but also in the _bt_findinsertloc() call later.
 	 */
 	Assert(!insertstate->bounds_valid);
-	offset = _bt_binsrch_insert(rel, insertstate);
+	offset = ts_bt_binsrch_insert(rel, rel_tupdesc, insertstate);
 
 	/*
 	 * Scan over all equal tuples, looking for live conflicts.
@@ -617,9 +618,6 @@ ts_bt_check_unique(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertstat
 					 * This is a definite conflict.  Break the tuple down into
 					 * datums and report the error.  But first, make sure we
 					 * release the buffer locks we're holding ---
-					 * BuildIndexValueDescription could make catalog accesses,
-					 * which in the worst case might touch this same index and
-					 * cause deadlocks.
 					 */
 					if (nbuf != InvalidBuffer)
 						_bt_relbuf(rel, nbuf);
@@ -631,10 +629,13 @@ ts_bt_check_unique(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertstat
 						Datum values[INDEX_MAX_KEYS];
 						bool isnull[INDEX_MAX_KEYS];
 						char *key_desc;
+						int indnkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 
-						index_deform_tuple(itup, RelationGetDescr(rel), values, isnull);
-
-						key_desc = BuildIndexValueDescription(rel, values, isnull);
+						index_deform_tuple(itup, rel_tupdesc, values, isnull);
+						key_desc = ts_compress_uk_build_indexdescr(rel_tupdesc,
+																   indnkeyatts,
+																   values,
+																   isnull);
 
 						ereport(ERROR,
 								(errcode(ERRCODE_UNIQUE_VIOLATION),
@@ -963,7 +964,7 @@ ts_bt_findinsertloc(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertsta
 	 */
 	Assert(P_RIGHTMOST(lpageop) || ts_bt_compare(rel, rel_tupdesc, itup_key, page, P_HIKEY) <= 0);
 
-	newitemoff = _bt_binsrch_insert(rel, insertstate);
+	newitemoff = ts_bt_binsrch_insert(rel, rel_tupdesc, insertstate);
 
 	if (insertstate->postingoff == -1)
 	{
@@ -982,7 +983,7 @@ ts_bt_findinsertloc(Relation rel, TupleDesc rel_tupdesc, BTInsertState insertsta
 		 */
 		insertstate->bounds_valid = false;
 		insertstate->postingoff = 0;
-		newitemoff = _bt_binsrch_insert(rel, insertstate);
+		newitemoff = ts_bt_binsrch_insert(rel, rel_tupdesc, insertstate);
 		Assert(insertstate->postingoff == 0);
 	}
 

@@ -15,6 +15,10 @@
 
 #include "catalog.h"
 
+void ts_debug_compress_uk_tup(TupleDesc out_desc, int natts, Datum *out_val, bool *out_null);
+char *ts_compress_uk_build_indexdescr(TupleDesc out_desc, int nindatts, Datum *out_val,
+									  bool *out_null);
+
 extern IndexBuildResult *compress_uk_build(Relation heap, Relation index, IndexInfo *indexInfo);
 
 #endif /* TIMESCALEDB_TSL_COMPRESS_UK_BUILD_H */

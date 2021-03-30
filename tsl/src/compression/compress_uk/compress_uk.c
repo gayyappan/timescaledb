@@ -163,9 +163,10 @@ compress_uk_insert(Relation index_rel, Datum *values, bool *isnull, ItemPointer 
 									   &out_null))
 	{
 		IndexTuple itup;
+		ts_debug_compress_uk_tup(ukstate->index_tuple_desc, 1, out_val, out_null);
 
 		/* generate an index tuple, try to resus here TODO */
-		itup = index_form_tuple(ukstate->index_tuple_desc, values, isnull);
+		itup = index_form_tuple(ukstate->index_tuple_desc, out_val, out_null);
 		itup->t_tid = *ht_ctid;
 
 		result = ts_compress_uk_doinsert(index_rel,
