@@ -47,7 +47,7 @@ SELECT * FROM test1 WHERE i = 11;
 --cannot check unique constraints yet
 CREATE TABLE test2 (timec timestamptz , 
       i integer CHECK ( i > 10) ,
-      b bigint default 20 , 
+      b bigint default 20 ,
       t text NOT NULL,  unique ( b, timec),
       CONSTRAINT rowconstr CHECK ( b > i )
 );
@@ -80,5 +80,35 @@ INSERT INTO test2 values ( '2020-01-02 01:00:00-05', 22, 1, 'null i');
 SELECT count(c)
 FROM show_chunks('test2') c;
 
+-- test with sequence .
+CREATE SEQUENCE vessel_id_seq
+    INCREMENT 1
+    START 1    MINVALUE 1
+    MAXVALUE 9223372036854775807
+    CACHE 1;
+
+CREATE TABLE vessels (timec timestamptz ,
+      id bigint NOT NULL DEFAULT nextval('vessel_id_seq'::regclass) , 
+      i integer CHECK ( i > 10) ,
+      b bigint default 20 ,
+      t text NOT NULL,  unique ( b, timec),
+      CONSTRAINT rowconstr CHECK ( b > i )
+);
+
+SELECT table_name from create_hypertable('vessels', 'timec', chunk_time_interval=> INTERVAL '7 days');
+
+ALTER TABLE vessels set (timescaledb.compress, 
+timescaledb.compress_segmentby = 'b', 
+timescaledb.compress_orderby = 'timec DESC');
+
+INSERT INTO vessels(timec, i, b, t) values('2020-01-02 11:16:00-05' , 100, 105, 'first' );
+SELECT compress_chunk(c)
+FROM show_chunks('vessels') c;
+
+-- test if default value for b and sequence value is used
+INSERT INTO vessels(timec, i, t) values('2020-01-02 10:16:00-05' , 11, 'default' );
+
+SELECT timec, id, b from vessels order by 2, 1; 
+----
 -- need tests with dropped columns on hypertable and then adding data
 -- to chunk
