@@ -8,9 +8,11 @@ accidentally triggering the load of a previous DB version.**
 
 **Bugfixes**
 * #3401 Fix segfault for RelOptInfo without fdw_private
+* #3430 Fix havingqual processing for continuous aggregates
 
 **Thanks**
 * @fvannee for reporting an issue with hypertable expansion in functions
+* @brianbenns for reporting a segfault with continuous aggregates
 
 ## 2.3.1 (2021-07-05)
 

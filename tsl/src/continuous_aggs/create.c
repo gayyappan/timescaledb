@@ -11,7 +11,7 @@
  * The entry point for the code is
  * tsl_process_continuous_agg_viewstmt
  * The bulk of the code that creates the underlying tables/views etc. is in
- * cagg_create
+ * cagg_create.
  *
  */
 #include <postgres.h>
@@ -1335,8 +1335,8 @@ add_aggregate_partialize_mutator(Node *node, AggPartCxt *cxt)
  */
 typedef struct Cagg_havingcxt
 {
-	TargetEntry *old;
-	TargetEntry *new;
+	List *orig_tlist;
+	List *mod_tlist;
 	bool found;
 } cagg_havingcxt;
 
@@ -1348,40 +1348,55 @@ replace_having_qual_mutator(Node *node, cagg_havingcxt *cxt)
 {
 	if (node == NULL)
 		return NULL;
-	if (equal(node, cxt->old->expr))
+	ListCell *lc, *lc2;
+	List *origtlist = cxt->orig_tlist;
+	List *modtlist = cxt->mod_tlist;
+	forboth (lc, origtlist, lc2, modtlist)
 	{
-		cxt->found = true;
-		return (Node *) cxt->new->expr;
+		TargetEntry *te = (TargetEntry *) lfirst(lc);
+		TargetEntry *modte = (TargetEntry *) lfirst(lc2);
+		if (equal(node, te->expr))
+		{
+			cxt->found = true;
+			return (Node *) modte->expr;
+		}
 	}
 	return expression_tree_mutator(node, replace_having_qual_mutator, cxt);
 }
 
-/* modify the havingqual and replace exprs that already occur in targetlist
- * with entries from new target list
+/* modify the havingqual and replace exprs (in havingqual) that already occur
+ * in targetlist with entries from new target list
+ * Arguments:
+ *   origquery : Query whose havingqual will be modified.
+ *   newtlist : fixed up targetlist for origquery (the origquery's tlist is mapped
+ *              to columns from materialized hypertable). There is a 1-1 mapping
+ *              between origquery->targetList and newtlist
  * RETURNS: havingQual
+ * Example:
+ * SELECT x, count(x) , time_bucket(...)  ---->origquery's tlist
+ * FROM ...
+ * HAVING count(x) > 10 and sum(y) > 11 --->havingQual
+ *
+ * modtlist would have entries corresponding to the finalize query's tlist:
+ *   x , finalize(count(x)), timebucket,
+ *   which look more like: col1, finalize(col1), col2 where the col# correspond to the
+ *                         columns from the materialization hypertable.
+ * (see comments for cagg_havingcxt )
+ * count(x) : already appears in the targetlist of the query and should be
+ * replaced by the corresponding entry from modtlist. We have to compare count(x)
+ * with all the entries in the tlist so that we do not match subexprs when the
+ * complete expr (e.g do not match x instead of count(x) ) is in the tlist.
+ * (issue 2655)
  */
 static Node *
 replace_targetentry_in_havingqual(Query *origquery, List *newtlist)
 {
 	Node *having = copyObject(origquery->havingQual);
-	List *origtlist = origquery->targetList;
-	List *modtlist = newtlist;
-	ListCell *lc, *lc2;
 	cagg_havingcxt hcxt;
-
-	/* if we have any exprs that are in the targetlist, then we already have columns
-	 * for them in the mat table. So replace with the correct expr
-	 */
-	forboth (lc, origtlist, lc2, modtlist)
-	{
-		TargetEntry *te = (TargetEntry *) lfirst(lc);
-		TargetEntry *modte = (TargetEntry *) lfirst(lc2);
-		hcxt.old = te;
-		hcxt.new = modte;
-		hcxt.found = false;
-		having =
-			(Node *) expression_tree_mutator((Node *) having, replace_having_qual_mutator, &hcxt);
-	}
+	hcxt.orig_tlist = origquery->targetList;
+	hcxt.mod_tlist = newtlist;
+	hcxt.found = false;
+	having = (Node *) expression_tree_mutator((Node *) having, replace_having_qual_mutator, &hcxt);
 	return having;
 }
 
@@ -1582,7 +1597,7 @@ fixup_userview_query_tlist(Query *userquery, List *tlist_aliases)
  *
  * Step 1. create a materialiation table which stores the partials for the
  * aggregates and the grouping columns + internal columns.
- * So we have a table like ts_internal_mcagg_tab
+ * So we have a table like _materialization_hypertable
  * with columns:
  *( a, col1, col2, col3, internal-columns)
  * where col1 =  partialize(min(b)), col2= partialize(max(d)),
@@ -1592,7 +1607,7 @@ fixup_userview_query_tlist(Query *userquery, List *tlist_aliases)
  * CREATE VIEW mcagg
  * as
  * select a, finalize( col1) + finalize(col2))
- * from ts_internal_mcagg
+ * from _materialization_hypertable
  * group by a, col3
  *
  * Step 3: Create a view to populate the materialization table

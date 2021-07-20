@@ -1415,3 +1415,47 @@ NOTICE:  drop cascades to 6 other objects
 NOTICE:  drop cascades to table _timescaledb_internal._hyper_35_75_chunk
 NOTICE:  drop cascades to table _timescaledb_internal._hyper_36_76_chunk
 NOTICE:  drop cascades to table _timescaledb_internal._hyper_37_77_chunk
+----
+--- github issue 2655 ---
+create table raw_data(time timestamptz, search_query text, cnt integer);
+select create_hypertable('raw_data','time');
+NOTICE:  adding not-null constraint to column "time"
+   create_hypertable    
+------------------------
+ (38,public,raw_data,t)
+(1 row)
+
+insert into raw_data select '2000-01-01','Q1';
+CREATE MATERIALIZED VIEW search_query_count_1m WITH (timescaledb.continuous) 
+AS
+ SELECT  search_query,count(search_query) as count,
+         time_bucket(INTERVAL '1 minute', time) AS bucket
+ FROM raw_data
+ WHERE search_query is not null AND LENGTH(TRIM(both from search_query))>0
+ GROUP BY search_query, bucket HAVING count(search_query) > 3 OR sum(cnt) > 1;
+NOTICE:  refreshing continuous aggregate "search_query_count_1m"
+insert into raw_data select '2000-01-01 00:00+0','Q1', 1;
+insert into raw_data select '2000-01-01 00:00+0','Q1', 2;
+insert into raw_data select '2000-01-01 00:00+0','Q1', 3;
+insert into raw_data select '2000-01-02 00:00+0','Q2', 10;
+insert into raw_data select '2000-01-02 00:00+0','Q2', 20;
+CALL refresh_continuous_aggregate('search_query_count_1m', NULL, NULL);
+SELECT * FROM search_query_count_1m ORDER BY 1, 2;
+ search_query | count |            bucket            
+--------------+-------+------------------------------
+ Q1           |     3 | Fri Dec 31 16:00:00 1999 PST
+ Q2           |     2 | Sat Jan 01 16:00:00 2000 PST
+(2 rows)
+
+--only 1 of these should appear in the result
+insert into raw_data select '2000-01-02 00:00+0','Q3', 0;
+insert into raw_data select '2000-01-03 00:00+0','Q4', 20;
+CALL refresh_continuous_aggregate('search_query_count_1m', NULL, NULL);
+SELECT * FROM search_query_count_1m ORDER BY 1, 2;
+ search_query | count |            bucket            
+--------------+-------+------------------------------
+ Q1           |     3 | Fri Dec 31 16:00:00 1999 PST
+ Q2           |     2 | Sat Jan 01 16:00:00 2000 PST
+ Q4           |     1 | Sun Jan 02 16:00:00 2000 PST
+(3 rows)
+
