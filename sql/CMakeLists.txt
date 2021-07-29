@@ -31,7 +31,7 @@ set(MOD_FILES
 
 # Files for downgrade scripts. This should only include files for downgrade to
 # previous version since we do not support skipping versions when downgrading
-set(REV_FILES)
+set(REV_FILES updates/2.4.0--2.3.1.sql)
 
 set(MODULE_PATHNAME "$libdir/timescaledb-${PROJECT_VERSION_MOD}")
 set(LOADER_PATHNAME "$libdir/timescaledb")
