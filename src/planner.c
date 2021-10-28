@@ -929,7 +929,8 @@ timescaledb_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, Rang
 			if (IS_UPDL_CMD(root->parse) && dml_involves_hypertable(root, ht, rti))
 			{
 				if (ts_cm_functions->set_rel_pathlist_dml != NULL)
-					ts_cm_functions->set_rel_pathlist_dml(root, rel, rti, rte, ht);
+					ts_cm_functions
+						->set_rel_pathlist_dml(root, rel, rti, rte, ht, root->parse->commandType);
 				break;
 			}
 			TS_FALLTHROUGH;

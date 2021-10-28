@@ -116,19 +116,21 @@ tsl_set_rel_pathlist_query(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeT
 }
 void
 tsl_set_rel_pathlist_dml(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntry *rte,
-						 Hypertable *ht)
+						 Hypertable *ht, CmdType dml)
 {
 	if (ht != NULL && TS_HYPERTABLE_HAS_COMPRESSION_TABLE(ht))
 	{
-		ListCell *lc;
+		// ListCell *lc;
 		Chunk *chunk = ts_chunk_get_by_relid(rte->relid, true);
 		if (chunk->fd.compressed_chunk_id > 0)
 		{
-			foreach (lc, rel->pathlist)
-			{
-				Path **pathptr = (Path **) &lfirst(lc);
-				*pathptr = compress_chunk_dml_generate_paths(*pathptr, chunk);
-			}
+			compress_chunk_dml_generate_paths(root, rel, ht, chunk, dml);
+			/*			foreach (lc, rel->pathlist)
+						{
+							Path **pathptr = (Path **) &lfirst(lc);
+							*pathptr = compress_chunk_dml_generate_paths(*pathptr, chunk);
+						}
+			*/
 		}
 	}
 }

@@ -136,9 +136,18 @@ compress_chunk_dml_state_create(CustomScan *scan)
 	return (Node *) state;
 }
 
-Path *
-compress_chunk_dml_generate_paths(Path *subpath, Chunk *chunk)
+void
+compress_chunk_dml_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hypertable *ht,
+								  Chunk *chunk, CmdType dmlcmd)
 {
 	Assert(chunk->fd.compressed_chunk_id > 0);
-	return compress_chunk_dml_path_create(subpath, chunk->table_id);
+	if (dmlcmd == CMD_UPDATE || dmlcmd == CMD_DELETE)
+	{
+		ListCell *lc;
+		foreach (lc, chunk_rel->pathlist)
+		{
+			Path **pathptr = (Path **) &lfirst(lc);
+			*pathptr = compress_chunk_dml_path_create(*pathptr, chunk->table_id);
+		}
+	}
 }

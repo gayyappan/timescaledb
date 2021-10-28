@@ -24,7 +24,9 @@ typedef struct CompressChunkDmlState
 	Oid chunk_relid;
 } CompressChunkDmlState;
 
-Path *compress_chunk_dml_generate_paths(Path *subpath, Chunk *chunk);
+// Path *compress_chunk_dml_generate_paths(Path *subpath, Chunk *chunk);
+void compress_chunk_dml_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hypertable *ht,
+									   Chunk *chunk, CmdType dmcmd);
 
 #define COMPRESS_CHUNK_DML_STATE_NAME "CompressChunkDmlState"
 #endif
