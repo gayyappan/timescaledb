@@ -15,6 +15,7 @@
 #include "ts_catalog/hypertable_compression.h"
 #include "compress_dml.h"
 #include "utils.h"
+#include "nodes/decompress_chunk/decompress_chunk.h"
 
 /*Path, Plan and State node for processing dml on compressed chunks
  * For now, this just blocks updates/deletes on compressed chunks
@@ -141,7 +142,7 @@ compress_chunk_dml_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hype
 								  Chunk *chunk, CmdType dmlcmd)
 {
 	Assert(chunk->fd.compressed_chunk_id > 0);
-	if (dmlcmd == CMD_UPDATE || dmlcmd == CMD_DELETE)
+	if (dmlcmd == CMD_UPDATE)
 	{
 		ListCell *lc;
 		foreach (lc, chunk_rel->pathlist)
@@ -149,5 +150,9 @@ compress_chunk_dml_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hype
 			Path **pathptr = (Path **) &lfirst(lc);
 			*pathptr = compress_chunk_dml_path_create(*pathptr, chunk->table_id);
 		}
+	}
+	else if (dmlcmd == CMD_DELETE)
+	{
+		ts_decompress_chunk_generate_paths(root, chunk_rel, ht, chunk);
 	}
 }

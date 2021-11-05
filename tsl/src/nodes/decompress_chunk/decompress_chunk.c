@@ -55,7 +55,8 @@ static DecompressChunkPath *decompress_chunk_path_create(PlannerInfo *root, Comp
 														 Path *compressed_path);
 
 static void decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk *chunk,
-											 RelOptInfo *chunk_rel, bool needs_sequence_num);
+											 RelOptInfo *chunk_rel, bool needs_sequence_num,
+											 bool is_dml);
 
 static SortInfo build_sortinfo(Chunk *chunk, RelOptInfo *chunk_rel, CompressionInfo *info,
 							   List *pathkeys);
@@ -341,6 +342,7 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 	double new_row_estimate;
 	Index ht_relid = 0;
 
+	bool is_dml = (root->parse->commandType == CMD_DELETE);
 	CompressionInfo *info = build_compressioninfo(root, ht, chunk_rel);
 
 	/* double check we don't end up here on single chunk queries with ONLY */
@@ -362,7 +364,12 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 	chunk_rel->partial_pathlist = NIL;
 
 	/* add RangeTblEntry and RelOptInfo for compressed chunk */
-	decompress_chunk_add_plannerinfo(root, info, chunk, chunk_rel, sort_info.needs_sequence_num);
+	decompress_chunk_add_plannerinfo(root,
+									 info,
+									 chunk,
+									 chunk_rel,
+									 sort_info.needs_sequence_num,
+									 is_dml);
 	compressed_rel = info->compressed_rel;
 
 	compressed_rel->consider_parallel = chunk_rel->consider_parallel;
@@ -492,6 +499,14 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 }
 
 static void
+compressed_reltarget_copy_system_var(RelOptInfo *compressed_rel, Var *var)
+{
+	Var *compvar = copyObject(var);
+	compvar->varattno = compressed_rel->relid;
+	compressed_rel->reltarget->exprs = lappend(compressed_rel->reltarget->exprs, compvar);
+}
+
+static void
 compressed_reltarget_add_whole_row_var(RelOptInfo *compressed_rel)
 {
 	compressed_rel->reltarget->exprs =
@@ -516,6 +531,67 @@ compressed_reltarget_add_var_for_column(RelOptInfo *compressed_rel, Oid compress
 /* copy over the vars from the chunk_rel->reltarget to the compressed_rel->reltarget
  * altering the fields that need it
  */
+static void
+compressed_rel_setup_reltarget_for_delete(RelOptInfo *compressed_rel, CompressionInfo *info)
+{
+	bool found_tableoid = false, found_self = false;
+	Oid compressed_relid = info->compressed_rte->relid;
+	ListCell *lc;
+	foreach (lc, info->chunk_rel->reltarget->exprs)
+	{
+		ListCell *lc2;
+		List *chunk_vars = pull_var_clause(lfirst(lc), PVC_RECURSE_PLACEHOLDERS);
+		foreach (lc2, chunk_vars)
+		{
+			FormData_hypertable_compression *column_info;
+			char *column_name;
+			Var *chunk_var = castNode(Var, lfirst(lc2));
+
+			/* skip vars that aren't from the uncompressed chunk */
+			if (chunk_var->varno != info->chunk_rel->relid)
+				continue;
+
+			/* if there's a system column or whole-row reference, add a whole-
+			 * row reference, and we're done.
+			 */
+			if (chunk_var->varattno == SelfItemPointerAttributeNumber)
+			{
+				compressed_reltarget_copy_system_var(compressed_rel, chunk_var);
+				found_self = true;
+				continue;
+			}
+			else if (chunk_var->varattno == TableOidAttributeNumber)
+			{
+				compressed_reltarget_copy_system_var(compressed_rel, chunk_var);
+				found_tableoid = true;
+				continue;
+			}
+			column_name = get_attname(info->chunk_rte->relid, chunk_var->varattno, false);
+			column_info =
+				get_column_compressioninfo(info->hypertable_compression_info, column_name);
+
+			Assert(column_info != NULL);
+
+			compressed_reltarget_add_var_for_column(compressed_rel, compressed_relid, column_name);
+
+			/* if the column is an orderby, add it's metadata columns too */
+			if (column_info->orderby_column_index > 0)
+			{
+				compressed_reltarget_add_var_for_column(compressed_rel,
+														compressed_relid,
+														compression_column_segment_min_name(
+															column_info));
+				compressed_reltarget_add_var_for_column(compressed_rel,
+														compressed_relid,
+														compression_column_segment_max_name(
+															column_info));
+			}
+		}
+	}
+	// TODO do we need the count column????
+	Assert(found_tableoid && found_self);
+}
+
 static void
 compressed_rel_setup_reltarget(RelOptInfo *compressed_rel, CompressionInfo *info,
 							   bool needs_sequence_num)
@@ -935,7 +1011,7 @@ compressed_rel_setup_equivalence_classes(PlannerInfo *root, CompressionInfo *inf
  */
 static void
 decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk *chunk,
-								 RelOptInfo *chunk_rel, bool needs_sequence_num)
+								 RelOptInfo *chunk_rel, bool needs_sequence_num, bool is_dml)
 {
 	ListCell *lc;
 	Index compressed_index = root->simple_rel_array_size;
@@ -975,7 +1051,11 @@ decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk
 				bms_add_member(info->compressed_chunk_compressed_attnos, compressed_chunk_attno);
 		}
 	}
-	compressed_rel_setup_reltarget(compressed_rel, info, needs_sequence_num);
+	if (is_dml)
+		compressed_rel_setup_reltarget_for_delete(compressed_rel, info);
+	else
+		compressed_rel_setup_reltarget(compressed_rel, info, needs_sequence_num);
+
 	compressed_rel_setup_equivalence_classes(root, info);
 	/* translate chunk_rel->joininfo for compressed_rel */
 	compressed_rel_setup_joininfo(compressed_rel, info);
