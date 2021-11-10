@@ -32,6 +32,7 @@ typedef enum DecompressChunkColumnType
 	COMPRESSED_COLUMN,
 	COUNT_COLUMN,
 	SEQUENCE_NUM_COLUMN,
+	SYSTEM_NUM_COLUMN,
 } DecompressChunkColumnType;
 
 typedef struct DecompressChunkColumnState
@@ -153,6 +154,10 @@ initialize_column_state(DecompressChunkState *state)
 					break;
 				case DECOMPRESS_CHUNK_SEQUENCE_NUM_ID:
 					column->type = SEQUENCE_NUM_COLUMN;
+					break;
+				case TableOidAttributeNumber:
+				case SelfItemPointerAttributeNumber:
+					column->type = SYSTEM_NUM_COLUMN;
 					break;
 				default:
 					elog(ERROR, "Invalid column attno \"%d\"", column->attno);
@@ -304,6 +309,7 @@ initialize_batch(DecompressChunkState *state, TupleTableSlot *slot)
 				Assert(!isnull);
 				break;
 			case SEQUENCE_NUM_COLUMN:
+			case SYSTEM_NUM_COLUMN:
 				/*
 				 * nothing to do here for sequence number
 				 * we only needed this for sorting in node below
@@ -450,6 +456,19 @@ decompress_chunk_create_tuple(DecompressChunkState *state)
 					slot->tts_isnull[attr] = column->segmentby.isnull;
 					break;
 				}
+					/* system columns should be automatically filled. Do we need to do anything here
+					 * ??? */
+					/*
+									case SYSTEM_NUM_COLUMN:
+									{
+										value = slot_getsysattr(slot, i, &isnull);
+										slot->tts_values[attr] = value;
+										slot->tts_isnull[attr] = isnull;
+										Assert(!isnull);
+										break;
+									}
+					*/
+				case SYSTEM_NUM_COLUMN:
 				case SEQUENCE_NUM_COLUMN:
 					/*
 					 * nothing to do here for sequence number

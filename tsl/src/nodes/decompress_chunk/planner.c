@@ -61,6 +61,20 @@ make_compressed_scan_meta_targetentry(DecompressChunkPath *path, char *column_na
 	return makeTargetEntry((Expr *) scan_var, tle_index, NULL, false);
 }
 
+/* for deletes, we have to retrieve tableoid, ctid */
+static TargetEntry *
+make_compressed_scan_systemcol_targetentry(DecompressChunkPath *path, Var *var, int tle_index)
+{
+	Var *scan_var;
+	AttrNumber compressed_attno = var->varattno;
+	Assert(compressed_attno < 0);
+	scan_var = (Var *) copyObject(var);
+	scan_var->varno = path->info->compressed_rel->relid;
+	path->varattno_map = lappend_int(path->varattno_map, scan_var->varattno);
+
+	return makeTargetEntry((Expr *) scan_var, tle_index, NULL, false);
+}
+
 /*
  * Find matching column attno for compressed chunk based on hypertable attno.
  *
@@ -124,13 +138,13 @@ make_compressed_scan_targetentry(DecompressChunkPath *path, AttrNumber ht_attno,
  * attno accordingly
  */
 static List *
-build_scan_tlist(DecompressChunkPath *path)
+build_scan_tlist(DecompressChunkPath *path, List *target_list)
 {
 	List *scan_tlist = NIL;
 	Bitmapset *attrs_used = path->info->ht_rte->selectedCols;
 	TargetEntry *tle;
 	int bit;
-
+	bool is_delete = (bool) linitial_int((List *) path->cpath.custom_private);
 	path->varattno_map = NIL;
 
 	/* add count column */
@@ -202,6 +216,31 @@ build_scan_tlist(DecompressChunkPath *path)
 		}
 	}
 
+	if (is_delete)
+	{
+		ListCell *lc;
+		// for delete we need columns requested in the targetlist
+		foreach (lc, target_list)
+		{
+			TargetEntry *te = (TargetEntry *) lfirst(lc);
+			Node *node = (Node *) te->expr;
+			if (IsA(node, Var))
+			{
+				Var *chunk_var = castNode(Var, node);
+
+				/*expect only system vars from the uncompressed chunk */
+				Assert(chunk_var->varno == path->info->chunk_rel->relid);
+				if (chunk_var->varattno >= 0)
+					elog(ERROR, "unexpected var %d for delete path", chunk_var->varattno);
+				tle = make_compressed_scan_systemcol_targetentry(path,
+																 chunk_var,
+																 list_length(scan_tlist) + 1);
+				scan_tlist = lappend(scan_tlist, tle);
+			}
+			else
+				elog(ERROR, "unexpected expr in targetlist for delete path");
+		}
+	}
 	return scan_tlist;
 }
 
@@ -341,9 +380,9 @@ decompress_chunk_plan_create(PlannerInfo *root, RelOptInfo *rel, CustomPath *pat
 	}
 	else if (IsA(compressed_path, BitmapHeapPath))
 	{
-		/* To increase performance, we should remove quals that are redundant with the Bitmap scan
-		 * Code from create_bitmap_scan_plan does something similar, and could be used as a starting
-		 * point.
+		/* To increase performance, we should remove quals that are redundant with the Bitmap
+		 * scan Code from create_bitmap_scan_plan does something similar, and could be used as a
+		 * starting point.
 		 */
 		foreach (lc, clauses)
 		{
@@ -363,7 +402,7 @@ decompress_chunk_plan_create(PlannerInfo *root, RelOptInfo *rel, CustomPath *pat
 	cscan->scan.plan.qual =
 		(List *) replace_compressed_vars((Node *) cscan->scan.plan.qual, dcpath->info);
 
-	compressed_scan->plan.targetlist = build_scan_tlist(dcpath);
+	compressed_scan->plan.targetlist = build_scan_tlist(dcpath, tlist);
 	if (!pathkeys_contained_in(dcpath->compressed_pathkeys, compressed_path->pathkeys))
 	{
 		List *compressed_pks = dcpath->compressed_pathkeys;

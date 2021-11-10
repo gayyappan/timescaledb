@@ -52,11 +52,11 @@ static void create_compressed_scan_paths(PlannerInfo *root, RelOptInfo *compress
 
 static DecompressChunkPath *decompress_chunk_path_create(PlannerInfo *root, CompressionInfo *info,
 														 int parallel_workers,
-														 Path *compressed_path);
+														 Path *compressed_path, bool is_delete);
 
 static void decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk *chunk,
 											 RelOptInfo *chunk_rel, bool needs_sequence_num,
-											 bool is_dml);
+											 bool is_delete);
 
 static SortInfo build_sortinfo(Chunk *chunk, RelOptInfo *chunk_rel, CompressionInfo *info,
 							   List *pathkeys);
@@ -342,7 +342,7 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 	double new_row_estimate;
 	Index ht_relid = 0;
 
-	bool is_dml = (root->parse->commandType == CMD_DELETE);
+	bool is_delete = (root->parse->commandType == CMD_DELETE);
 	CompressionInfo *info = build_compressioninfo(root, ht, chunk_rel);
 
 	/* double check we don't end up here on single chunk queries with ONLY */
@@ -369,7 +369,7 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 									 chunk,
 									 chunk_rel,
 									 sort_info.needs_sequence_num,
-									 is_dml);
+									 is_delete);
 	compressed_rel = info->compressed_rel;
 
 	compressed_rel->consider_parallel = chunk_rel->consider_parallel;
@@ -431,7 +431,7 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 				continue;
 		}
 
-		path = decompress_chunk_path_create(root, info, 0, child_path);
+		path = decompress_chunk_path_create(root, info, 0, child_path, is_delete);
 
 		/* If we can push down the sort below the DecompressChunk node, we set the pathkeys of the
 		 * decompress node to the query pathkeys, while remembering the compressed_pathkeys
@@ -487,7 +487,8 @@ ts_decompress_chunk_generate_paths(PlannerInfo *root, RelOptInfo *chunk_rel, Hyp
 				 (!info->single_chunk &&
 				  bms_is_member(ht_relid, child_path->param_info->ppi_req_outer))))
 				continue;
-			path = decompress_chunk_path_create(root, info, parallel_workers, child_path);
+			path =
+				decompress_chunk_path_create(root, info, parallel_workers, child_path, is_delete);
 			add_partial_path(chunk_rel, &path->cpath.path);
 		}
 		/* the chunk_rel now owns the paths, remove them from the compressed_rel so they can't be
@@ -502,7 +503,8 @@ static void
 compressed_reltarget_copy_system_var(RelOptInfo *compressed_rel, Var *var)
 {
 	Var *compvar = copyObject(var);
-	compvar->varattno = compressed_rel->relid;
+	/* varno should refer to the compressed chunk */
+	compvar->varno = compressed_rel->relid;
 	compressed_rel->reltarget->exprs = lappend(compressed_rel->reltarget->exprs, compvar);
 }
 
@@ -1011,7 +1013,7 @@ compressed_rel_setup_equivalence_classes(PlannerInfo *root, CompressionInfo *inf
  */
 static void
 decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk *chunk,
-								 RelOptInfo *chunk_rel, bool needs_sequence_num, bool is_dml)
+								 RelOptInfo *chunk_rel, bool needs_sequence_num, bool is_delete)
 {
 	ListCell *lc;
 	Index compressed_index = root->simple_rel_array_size;
@@ -1051,7 +1053,7 @@ decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk
 				bms_add_member(info->compressed_chunk_compressed_attnos, compressed_chunk_attno);
 		}
 	}
-	if (is_dml)
+	if (is_delete)
 		compressed_rel_setup_reltarget_for_delete(compressed_rel, info);
 	else
 		compressed_rel_setup_reltarget(compressed_rel, info, needs_sequence_num);
@@ -1063,7 +1065,7 @@ decompress_chunk_add_plannerinfo(PlannerInfo *root, CompressionInfo *info, Chunk
 
 static DecompressChunkPath *
 decompress_chunk_path_create(PlannerInfo *root, CompressionInfo *info, int parallel_workers,
-							 Path *compressed_path)
+							 Path *compressed_path, bool is_delete)
 {
 	DecompressChunkPath *path;
 
@@ -1089,6 +1091,7 @@ decompress_chunk_path_create(PlannerInfo *root, CompressionInfo *info, int paral
 	path->cpath.path.parallel_aware = false;
 
 	path->cpath.custom_paths = list_make1(compressed_path);
+	path->cpath.custom_private = list_make1_int(is_delete);
 	path->reverse = false;
 	path->compressed_pathkeys = NIL;
 	cost_decompress_chunk(&path->cpath.path, compressed_path);
