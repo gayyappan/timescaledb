@@ -22,3 +22,6 @@ DROP FUNCTION _timescaledb_internal.unfreeze_chunk( chunk REGCLASS);
 -- Drop dimension partition metadata table
 ALTER EXTENSION timescaledb DROP TABLE _timescaledb_catalog.dimension_partition;
 DROP TABLE IF EXISTS _timescaledb_catalog.dimension_partition;
+
+--drop new index on chunk table
+DROP INDEX _timescaledb_catalog.chunk_status_hypertable_id_idx;
