@@ -30,10 +30,6 @@ CROSSMODULE_WRAPPER(policy_compression_check);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_add);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_proc);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_check);
-CROSSMODULE_WRAPPER(policy_process_hyper_inval_remove);
-CROSSMODULE_WRAPPER(policy_process_hyper_inval_add);
-CROSSMODULE_WRAPPER(policy_process_hyper_inval_proc);
-CROSSMODULE_WRAPPER(policy_process_hyper_inval_check);
 CROSSMODULE_WRAPPER(policy_refresh_cagg_remove);
 CROSSMODULE_WRAPPER(policy_reorder_add);
 CROSSMODULE_WRAPPER(policy_reorder_proc);
@@ -88,6 +84,8 @@ CROSSMODULE_WRAPPER(decompress_chunk);
 CROSSMODULE_WRAPPER(rebuild_columnstore);
 CROSSMODULE_WRAPPER(bloom1_contains);
 CROSSMODULE_WRAPPER(bloom1_contains_any);
+CROSSMODULE_WRAPPER(bloom1_contains_any_hashes);
+CROSSMODULE_WRAPPER(bloom1_hash);
 
 /* continuous aggregate */
 CROSSMODULE_WRAPPER(continuous_agg_refresh);
@@ -195,7 +193,9 @@ process_compressed_data_in(PG_FUNCTION_ARGS)
 	ts_license_enable_module_loading();
 
 	if (ts_cm_functions->compressed_data_in != process_compressed_data_in)
+	{
 		return ts_cm_functions->compressed_data_in(fcinfo);
+	}
 
 	error_no_default_fn_pg_community(fcinfo);
 	pg_unreachable();
@@ -207,7 +207,9 @@ process_compressed_data_out(PG_FUNCTION_ARGS)
 	ts_license_enable_module_loading();
 
 	if (ts_cm_functions->compressed_data_out != process_compressed_data_out)
+	{
 		return ts_cm_functions->compressed_data_out(fcinfo);
+	}
 
 	error_no_default_fn_pg_community(fcinfo);
 	pg_unreachable();
@@ -250,6 +252,15 @@ continuous_agg_dml_invalidate_default(int32 hypertable_id, Relation chunk_rel,
 	pg_unreachable();
 }
 
+static bool
+continuous_agg_backfill_check_default(int32 hypertable_id, int64 chunk_range_end,
+									  TupleTableSlot *slot, const Hypertable *ht,
+									  const char *tenant_column_name)
+{
+	/* no-op when TSL is not loaded — nothing tracked, caller must run cache_inval */
+	return false;
+}
+
 TS_FUNCTION_INFO_V1(ts_tsl_loaded);
 
 PGDLLEXPORT Datum
@@ -280,7 +291,6 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.create_upper_paths_hook = NULL,
 	.set_rel_pathlist_dml = NULL,
 	.set_rel_pathlist_query = NULL,
-	.sort_transform_replace_pathkeys = NULL,
 	.process_altertable_cmd = NULL,
 	.process_rename_cmd = NULL,
 
@@ -303,10 +313,6 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.policy_refresh_cagg_proc = error_no_default_fn_pg_community,
 	.policy_refresh_cagg_check = error_no_default_fn_pg_community,
 	.policy_refresh_cagg_remove = error_no_default_fn_pg_community,
-	.policy_process_hyper_inval_add = error_no_default_fn_pg_community,
-	.policy_process_hyper_inval_proc = error_no_default_fn_pg_community,
-	.policy_process_hyper_inval_check = error_no_default_fn_pg_community,
-	.policy_process_hyper_inval_remove = error_no_default_fn_pg_community,
 	.policy_reorder_add = error_no_default_fn_pg_community,
 	.policy_reorder_proc = error_no_default_fn_pg_community,
 	.policy_reorder_check = error_no_default_fn_pg_community,
@@ -339,7 +345,9 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.continuous_agg_invalidate_raw_ht = continuous_agg_invalidate_raw_ht_all_default,
 	.continuous_agg_invalidate_mat_ht = continuous_agg_invalidate_mat_ht_all_default,
 	.continuous_agg_dml_invalidate = continuous_agg_dml_invalidate_default,
+	.continuous_agg_backfill_check = continuous_agg_backfill_check_default,
 	.continuous_agg_update_options = continuous_agg_update_options_default,
+	.continuous_agg_apply_rewrites_tsl = NULL,
 	.continuous_agg_validate_query = error_no_default_fn_pg_community,
 	.continuous_agg_get_bucket_function = error_no_default_fn_pg_community,
 	.continuous_agg_get_bucket_function_info = error_no_default_fn_pg_community,
@@ -373,6 +381,8 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.uuid_compressor_finish = error_no_default_fn_pg_community,
 	.bloom1_contains = error_no_default_fn_pg_community,
 	.bloom1_contains_any = error_no_default_fn_pg_community,
+	.bloom1_contains_any_hashes = error_no_default_fn_pg_community,
+	.bloom1_hash = error_no_default_fn_pg_community,
 	.bloom1_get_hash_function = bloom1_get_hash_function_default,
 
 	.decompress_batches_for_insert = error_no_default_fn_chunk_insert_state_community,

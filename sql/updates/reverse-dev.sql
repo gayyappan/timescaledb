@@ -1,7 +1,7 @@
---
--- Rebuild the catalog table `_timescaledb_catalog.chunk` to add column `dropped`
---
 
+-- Re-add self-referential foreign keys
+ALTER TABLE _timescaledb_catalog.hypertable ADD CONSTRAINT hypertable_compressed_hypertable_id_fkey FOREIGN KEY (compressed_hypertable_id) REFERENCES _timescaledb_catalog.hypertable (id);
+ALTER TABLE _timescaledb_catalog.chunk ADD CONSTRAINT chunk_compressed_chunk_id_fkey FOREIGN KEY (compressed_chunk_id) REFERENCES _timescaledb_catalog.chunk (id);
 CREATE TABLE _timescaledb_internal.tmp_chunk AS SELECT * from _timescaledb_catalog.chunk;
 CREATE TABLE _timescaledb_internal.tmp_chunk_seq_value AS SELECT last_value, is_called FROM _timescaledb_catalog.chunk_id_seq;
 
@@ -80,6 +80,12 @@ GRANT SELECT ON _timescaledb_catalog.chunk_id_seq TO PUBLIC;
 GRANT SELECT ON _timescaledb_catalog.chunk TO PUBLIC;
 -- end recreate _timescaledb_catalog.chunk table --
 
+-- Drop continuous_aggs_backfill_tracker table
+DROP TABLE IF EXISTS _timescaledb_catalog.continuous_aggs_backfill_tracker;
+
+-- Remove tenant_column_name from continuous_agg table
+ALTER TABLE _timescaledb_catalog.continuous_agg DROP COLUMN IF EXISTS tenant_column_name;
+
 -- Rebuild the catalog tables for continuous aggregate migration plans
 
 CREATE TABLE _timescaledb_catalog.continuous_agg_migrate_plan (
@@ -115,7 +121,9 @@ SELECT pg_catalog.pg_extension_config_dump(pg_get_serial_sequence('_timescaledb_
 GRANT SELECT ON ALL TABLES IN SCHEMA _timescaledb_catalog TO PUBLIC;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA _timescaledb_catalog TO PUBLIC;
 
-CREATE INDEX bgw_job_stat_history_job_id_idx ON _timescaledb_internal.bgw_job_stat_history (job_id);
-DROP INDEX _timescaledb_internal.bgw_job_stat_history_execution_start_idx;
-DROP INDEX _timescaledb_internal.bgw_job_stat_history_job_id_execution_start_idx;
+DROP FUNCTION IF EXISTS _timescaledb_functions.bloom1_contains_any_hashes(_timescaledb_internal.bloom1, bigint[]);
+DROP FUNCTION IF EXISTS _timescaledb_functions.bloom1_hash(anyelement);
 
+-- Drop BIGINT-returning version so the downgrade script can recreate the
+-- INTEGER-returning version of compressed_data_column_size.
+DROP FUNCTION IF EXISTS _timescaledb_functions.compressed_data_column_size(_timescaledb_internal.compressed_data, ANYELEMENT);

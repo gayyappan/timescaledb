@@ -48,10 +48,6 @@ typedef struct CrossModuleFunctions
 	PGFunction policy_refresh_cagg_proc;
 	PGFunction policy_refresh_cagg_check;
 	PGFunction policy_refresh_cagg_remove;
-	PGFunction policy_process_hyper_inval_add;
-	PGFunction policy_process_hyper_inval_proc;
-	PGFunction policy_process_hyper_inval_check;
-	PGFunction policy_process_hyper_inval_remove;
 	PGFunction policy_reorder_add;
 	PGFunction policy_reorder_proc;
 	PGFunction policy_reorder_check;
@@ -80,8 +76,6 @@ typedef struct CrossModuleFunctions
 	void (*set_rel_pathlist_dml)(PlannerInfo *, RelOptInfo *, Index, RangeTblEntry *, Hypertable *);
 	void (*set_rel_pathlist_query)(PlannerInfo *, RelOptInfo *, Index, RangeTblEntry *,
 								   Hypertable *);
-	void (*sort_transform_replace_pathkeys)(void *path, List *transformed_pathkeys,
-											List *original_pathkeys);
 
 	/* gapfill */
 	PGFunction gapfill_marker;
@@ -109,8 +103,12 @@ typedef struct CrossModuleFunctions
 	void (*continuous_agg_dml_invalidate)(int32 hypertable_id, Relation chunk_rel,
 										  HeapTuple chunk_tuple, HeapTuple chunk_newtuple,
 										  bool update);
+	bool (*continuous_agg_backfill_check)(int32 hypertable_id, int64 chunk_range_end,
+										  TupleTableSlot *slot, const Hypertable *ht,
+										  const char *tenant_column_name);
 	void (*continuous_agg_update_options)(ContinuousAgg *cagg,
 										  WithClauseResult *with_clause_options);
+	Query *(*continuous_agg_apply_rewrites_tsl)(Query *parse);
 	PGFunction continuous_agg_validate_query;
 	PGFunction continuous_agg_get_bucket_function;
 	PGFunction continuous_agg_get_bucket_function_info;
@@ -135,7 +133,7 @@ typedef struct CrossModuleFunctions
 
 	void (*columnstore_setup)(Hypertable *ht, WithClauseResult *with_clause_options);
 	RowCompressor *(*compressor_init)(Relation in_rel, BulkWriter **bulk_writer, bool sort,
-									  int tuple_sort_limit);
+									  int tuple_sort_limit, bool created_compressed_chunk);
 	void (*compressor_set_invalidation)(RowCompressor *compressor, Hypertable *ht, Oid chunk_relid);
 	void (*compressor_add_slot)(RowCompressor *compressor, BulkWriter *bulk_writer,
 								TupleTableSlot *slot);
@@ -166,6 +164,8 @@ typedef struct CrossModuleFunctions
 	PGFunction uuid_compressor_finish;
 	PGFunction bloom1_contains;
 	PGFunction bloom1_contains_any;
+	PGFunction bloom1_contains_any_hashes;
+	PGFunction bloom1_hash;
 	PGFunction (*bloom1_get_hash_function)(Oid type, FmgrInfo **finfo);
 
 	PGFunction create_chunk;

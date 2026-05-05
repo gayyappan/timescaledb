@@ -29,7 +29,7 @@
 		if (OidIsValid((newuid)))                                                                  \
 		{                                                                                          \
 			GetUserIdAndSecContext(&(saved_uid), &(saved_secctx));                                 \
-			SetUserIdAndSecContext(uid, (saved_secctx) | SECURITY_LOCAL_USERID_CHANGE);            \
+			SetUserIdAndSecContext(newuid, (saved_secctx) | SECURITY_LOCAL_USERID_CHANGE);         \
 		}                                                                                          \
 	} while (0)
 
@@ -154,6 +154,7 @@ ts_continuous_agg_find_by_mat_hypertable_id(int32 mat_hypertable_id, bool missin
 extern TSDLLEXPORT ContinuousAggHypertableStatus
 ts_continuous_agg_hypertable_status(int32 hypertable_id);
 extern TSDLLEXPORT List *ts_continuous_aggs_find_by_raw_table_id(int32 raw_hypertable_id);
+extern TSDLLEXPORT char *ts_continuous_agg_get_tenant_column_name(int32 raw_hypertable_id);
 extern TSDLLEXPORT ContinuousAgg *ts_continuous_agg_find_by_view_name(const char *schema,
 																	  const char *name,
 																	  ContinuousAggViewType type);
@@ -188,8 +189,12 @@ ts_compute_circumscribed_bucketed_refresh_window_variable(int64 *start, int64 *e
 														  const ContinuousAggBucketFunction *bf);
 extern TSDLLEXPORT int64 ts_compute_beginning_of_the_next_bucket_variable(
 	int64 timeval, const ContinuousAggBucketFunction *bf);
+extern TSDLLEXPORT int64
+ts_compute_start_of_current_bucket_variable(int64 timeval, const ContinuousAggBucketFunction *bf);
 
 extern TSDLLEXPORT Query *ts_continuous_agg_get_query(ContinuousAgg *cagg);
+
+extern TSDLLEXPORT Query *ts_continuous_agg_get_finalized_query(ContinuousAgg *cagg);
 
 extern TSDLLEXPORT int64
 ts_continuous_agg_fixed_bucket_width(const ContinuousAggBucketFunction *bucket_function);
