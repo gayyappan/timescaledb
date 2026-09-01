@@ -18,6 +18,9 @@ jobs:
     name: APT ${{ matrix.runner }} ${{ matrix.image }} PG${{ matrix.pg }} ${{ matrix.license }}
     container:
       image: ${{ matrix.image }}
+      # The granular refresh tracker allocates DSM segments out of /dev/shm,
+      # which docker defaults to 64 MB.
+      options: --shm-size=512m
       env:
         DEBIAN_FRONTEND: noninteractive
     strategy:
