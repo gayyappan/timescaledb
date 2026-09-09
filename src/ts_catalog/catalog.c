@@ -800,6 +800,13 @@ ts_catalog_invalidate_cache(Oid catalog_relid, CmdType operation)
 		case DIMENSION:
 		case CONTINUOUS_AGG:
 		case CHUNK_COLUMN_STATS:
+		/*
+		 * Granular refresh settings gate whether the DML path collects tenants
+		 * at all, and their removal is what frees the hypertable's tenant
+		 * tracker.  Backends cache the resolved tracker pointer for their
+		 * lifetime, so they have to be told when that happens.
+		 */
+		case HYPERTABLE_CAGG_SETTINGS:
 			relid = ts_catalog_get_cache_proxy_id(catalog, CACHE_TYPE_HYPERTABLE);
 			CacheInvalidateRelcacheByRelid(relid);
 			break;

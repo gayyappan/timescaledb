@@ -474,6 +474,37 @@ resolve_tenant_tracker(int32 hypertable_id)
 }
 
 /*
+ * Drop this backend's resolved-tracker cache.
+ *
+ * Called from the hypertable-proxy relcache invalidation callback, which is how
+ * a backend learns that some hypertable's granular refresh settings changed --
+ * and therefore that its tenant tracker may have been freed at that
+ * transaction's commit.  The cached pointers are raw DSA addresses with no way
+ * to tell a live tracker from a freed one, so the whole table goes; a re-resolve
+ * is one dshash lookup.
+ *
+ * The proxy carries no hypertable id, so this cannot be selective.  That also
+ * clears the cached DISABLED (NULL) entries, which is harmless: the
+ * negative-cache marker lives in the shared map entry, so a re-resolve for a
+ * hypertable whose allocation once failed still returns NULL without retrying
+ * the allocation.
+ *
+ * Safe to run mid-transaction.  A backend that has already buffered tenants
+ * this transaction will find no entry in tenant_local_htab_write() and record
+ * seqnum 0 for that hypertable, which makes the refresh fall back to the full
+ * invalidation log -- an over-refresh, never a missed one.
+ */
+void
+continuous_agg_tenant_tracker_cache_invalidate(void)
+{
+	if (tenant_tracker_resolved_htab != NULL)
+	{
+		hash_destroy(tenant_tracker_resolved_htab);
+		tenant_tracker_resolved_htab = NULL;
+	}
+}
+
+/*
  * Buffer one (tenant, time) pair into the per-transaction local tenant buffer.
  * Used by DML path (record_tenant_invalidation) and the direct-compress path
  * (continuous_agg_record_tenant_from_slot).

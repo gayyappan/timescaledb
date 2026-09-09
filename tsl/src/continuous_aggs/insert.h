@@ -17,3 +17,4 @@ extern void continuous_agg_dml_invalidate(int32 hypertable_id, Relation chunk_re
 										  bool update);
 extern void continuous_agg_record_tenant_from_slot(int32 hypertable_id, Oid chunk_relid,
 												   TupleTableSlot *slot);
+extern void continuous_agg_tenant_tracker_cache_invalidate(void);

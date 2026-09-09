@@ -84,16 +84,26 @@ cache_invalidate_relcache_callback(Datum arg, Oid relid)
 	if (!OidIsValid(relid))
 	{
 		cache_invalidate_relcache_all();
+		ts_cm_functions->tenant_tracker_cache_invalidate();
 	}
 	else if (ts_extension_is_proxy_table_relid(relid))
 	{
 		ts_extension_invalidate();
 		cache_invalidate_relcache_all();
+		ts_cm_functions->tenant_tracker_cache_invalidate();
 		ts_cache_invalidate_set_proxy_tables(InvalidOid, InvalidOid);
 	}
 	else if (relid == hypertable_proxy_table_oid)
 	{
 		ts_hypertable_cache_invalidate_callback();
+
+		/*
+		 * Deleting a hypertable's granular refresh settings frees its tenant
+		 * tracker at commit, so drop any tracker pointer this backend cached.
+		 * Deliberately not hooked into cache_invalidate_relcache_all(): that
+		 * also runs on every aborted transaction, where nothing was freed.
+		 */
+		ts_cm_functions->tenant_tracker_cache_invalidate();
 	}
 	else if (relid == bgw_proxy_table_oid)
 	{

@@ -187,6 +187,7 @@
 #include "debug_point.h"
 #include "loader/tenant_tracker_shmem.h"
 #include "tenant_tracker.h"
+#include "ts_catalog/catalog.h"
 #include "ts_catalog/continuous_aggs_tenant_tracking.h"
 
 /* ------------------------------------------------------------------------- */
@@ -994,6 +995,13 @@ pending_removals_reset(void)
  * its point of no return, where an ERROR would PANIC.  Once attached, the
  * callback path only takes an LWLock and frees -- no allocation, no catalog
  * access, nothing that raises.
+ *
+ * Queueing also registers the relcache invalidation that tells other backends
+ * to drop their cached tracker pointers.  It is emitted here rather than left to
+ * the caller's catalog delete so that the two are one operation: PostgreSQL
+ * broadcasts the message only if we commit (AtEOXact_Inval), and does so before
+ * releasing our locks, so a writer cannot acquire the hypertable and start using
+ * a stale pointer.
  */
 void
 ts_tenant_tracker_remove_at_commit(int32 hypertable_id)
@@ -1015,6 +1023,9 @@ ts_tenant_tracker_remove_at_commit(int32 hypertable_id)
 			return;
 		}
 	}
+
+	ts_catalog_invalidate_cache(catalog_get_table_id(ts_catalog_get(), HYPERTABLE_CAGG_SETTINGS),
+								CMD_DELETE);
 
 	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
 	pending = palloc(sizeof(*pending));
