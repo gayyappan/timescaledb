@@ -110,6 +110,9 @@ typedef struct CrossModuleFunctions
 	 * hypertable-proxy relcache invalidation says a tracker may have been
 	 * freed.  No-op when the TSL module is not loaded. */
 	void (*tenant_tracker_cache_invalidate)(void);
+	/* Queue the hypertable's tenant tracker to be freed at commit.  Caller must
+	 * hold AccessExclusiveLock on the hypertable.  No-op without TSL. */
+	void (*tenant_tracker_remove_at_commit)(int32 hypertable_id);
 	void (*continuous_agg_update_options)(ContinuousAgg *cagg,
 										  WithClauseResult *with_clause_options);
 	void (*continuous_agg_add_column)(ContinuousAgg *cagg, AlterTableStmt *stmt);
