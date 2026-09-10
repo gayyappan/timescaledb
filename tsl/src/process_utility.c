@@ -99,7 +99,11 @@ granular_refresh_disable(Hypertable *ht)
 	 * AccessExclusiveLock. This makes releasing the tracker's
 	 * shared memory safe as the lock will block DML writers (that write to
 	 * shared memory), so once we start hold this lock no writer can be
-	 * inside the tracker. so all dml blocked till the end of this DDL
+	 * inside the tracker. so all dml blocked till the end of this DDL.
+	 *
+	 * The lock is held past the commit callback that actually frees the
+	 * tracker (PostgreSQL releases locks after XACT_EVENT_COMMIT), so the
+	 * writers stay locked out for the whole window.
 	 */
 	LockRelationOid(ht->main_table_relid, AccessExclusiveLock);
 
@@ -130,7 +134,14 @@ granular_refresh_disable(Hypertable *ht)
 	list_free(caggs);
 
 	ts_hypertable_cagg_settings_delete(ht->fd.id);
-	ts_tenant_tracker_remove(ht->fd.id);
+
+	/*
+	 * Queue the shared-memory free for commit time rather than doing it here:
+	 * the catalog delete above is transactional and the free is not, so a
+	 * rollback would otherwise leave the settings row restored with the tracker
+	 * already gone.
+	 */
+	ts_tenant_tracker_remove_at_commit(ht->fd.id);
 }
 
 /*
