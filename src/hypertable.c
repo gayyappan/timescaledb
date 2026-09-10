@@ -679,6 +679,19 @@ hypertable_tuple_delete(TupleInfo *ti, void *data)
 	ts_hypertable_cagg_settings_delete(hypertable_id);
 	ts_cagg_tenant_tracking_delete_by_hypertable_id(hypertable_id);
 
+	/*
+	 * Release the hypertable's tenant tracker too, or its shared memory stays
+	 * allocated until restart.  Queued for commit rather than freed here: the
+	 * catalog deletes above roll back and a shared-memory free does not.  DROP
+	 * TABLE already holds AccessExclusiveLock on the relation (still held even
+	 * though the relation itself is gone by the time the drop eventtrigger runs
+	 * this), which is what keeps writers out until the free has happened.
+	 *
+	 * Reached for a materialized hypertable as well, where there is no tracker
+	 * and this is a no-op.
+	 */
+	ts_cm_functions->tenant_tracker_remove_at_commit(hypertable_id);
+
 	/* Remove any dependent continuous aggs */
 	ts_continuous_agg_drop_hypertable_callback(hypertable_id);
 
