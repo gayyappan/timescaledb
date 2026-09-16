@@ -689,8 +689,16 @@ hypertable_tuple_delete(TupleInfo *ti, void *data)
 	 *
 	 * Reached for a materialized hypertable as well, where there is no tracker
 	 * and this is a no-op.
+	 *
+	 * The relation is usually already dropped here, so the lookup yields
+	 * InvalidOid; the removal then invalidates every cached tracker pointer in
+	 * this backend instead of just this hypertable's.
 	 */
-	ts_cm_functions->tenant_tracker_remove_at_commit(hypertable_id);
+	Name schema_name = DatumGetName(slot_getattr(ti->slot, Anum_hypertable_schema_name, &isnull));
+	Name table_name = DatumGetName(slot_getattr(ti->slot, Anum_hypertable_table_name, &isnull));
+	Oid main_table_relid = ts_get_relation_relid(NameStr(*schema_name), NameStr(*table_name), true);
+
+	ts_cm_functions->tenant_tracker_remove_at_commit(main_table_relid, hypertable_id);
 
 	/* Remove any dependent continuous aggs */
 	ts_continuous_agg_drop_hypertable_callback(hypertable_id);
@@ -699,10 +707,6 @@ hypertable_tuple_delete(TupleInfo *ti, void *data)
 	/* Invoke the OSM callback if set */
 	if (osm_htdrop_hook)
 	{
-		Name schema_name =
-			DatumGetName(slot_getattr(ti->slot, Anum_hypertable_schema_name, &isnull));
-		Name table_name = DatumGetName(slot_getattr(ti->slot, Anum_hypertable_table_name, &isnull));
-
 		osm_htdrop_hook(NameStr(*schema_name), NameStr(*table_name));
 	}
 

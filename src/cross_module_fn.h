@@ -107,7 +107,7 @@ typedef struct CrossModuleFunctions
 										  HeapTuple chunk_tuple, HeapTuple chunk_newtuple,
 										  bool update);
 	void (*tenant_tracker_cache_invalidate)(Oid relid);
-	void (*tenant_tracker_remove_at_commit)(int32 hypertable_id);
+	void (*tenant_tracker_remove_at_commit)(Oid main_table_relid, int32 hypertable_id);
 	void (*continuous_agg_update_options)(ContinuousAgg *cagg,
 										  WithClauseResult *with_clause_options);
 	void (*continuous_agg_add_column)(ContinuousAgg *cagg, AlterTableStmt *stmt);

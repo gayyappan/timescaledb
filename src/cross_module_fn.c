@@ -293,7 +293,7 @@ tenant_tracker_cache_invalidate_default(Oid relid)
 }
 
 static void
-tenant_tracker_remove_at_commit_default(int32 hypertable_id)
+tenant_tracker_remove_at_commit_default(Oid main_table_relid, int32 hypertable_id)
 {
 	/* No op in community licensed code: nothing is tracked without TSL. */
 }

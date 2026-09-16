@@ -149,7 +149,7 @@ granular_refresh_disable(Hypertable *ht)
 	ts_hypertable_cagg_settings_delete(ht->fd.id);
 
 	/* Queue the shared-memory free for commit time */
-	ts_tenant_tracker_remove_at_commit(ht->fd.id, ht->main_table_relid);
+	ts_tenant_tracker_remove_at_commit(ht->main_table_relid, ht->fd.id);
 
 	/* Tell other backends to drop their cached pointer to the tracker*/
 	CacheInvalidateRelcacheByRelid(ht->main_table_relid);

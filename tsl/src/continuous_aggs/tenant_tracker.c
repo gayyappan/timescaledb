@@ -999,7 +999,7 @@ pending_removals_reset(void)
  * invalidation is never missed.
  */
 void
-ts_tenant_tracker_remove_at_commit(int32 hypertable_id, Oid main_table_relid)
+ts_tenant_tracker_remove_at_commit(Oid main_table_relid, int32 hypertable_id)
 {
 	MemoryContext oldcxt;
 	PendingTrackerRemoval *pending;
